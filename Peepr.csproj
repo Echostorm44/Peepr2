@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Peepr</AssemblyName>
+    <RootNamespace>Peepr</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Version>2.0.0</Version>
+
+    <!-- The cascade installer packager stages helper projects under "<output>-build"; keep them,
+         and the tests, out of this project's default globbing. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);dist/**;dist-build/**;tests/**</DefaultItemExcludes>
+
+    <ApplicationIcon>Assets\Peepr.ico</ApplicationIcon>
+
+    <!-- Release is self-contained AOT (the installer wizard references this project, and a
+         self-contained exe cannot reference a non-self-contained one: NETSDK1150). -->
+    <PublishAot Condition="'$(Configuration)' == 'Release'">true</PublishAot>
+    <OptimizationPreference Condition="'$(Configuration)' == 'Release'">Speed</OptimizationPreference>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+
+  <!-- Real-time video decode needs the optimiser even in a debug build. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.45" />
+    <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.1" />
+    <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\PeeprBackDrop.png" LogicalName="PeeprBackDrop.png" />
+  </ItemGroup>
+
+</Project>
