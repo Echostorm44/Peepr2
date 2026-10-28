@@ -1,7 +1,193 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 
 namespace Peepr;
+
+/// <summary>
+/// Registers Peepr with Windows for its photo and video types, per user (no admin). Peepr joins each type's
+/// "Open with" list and registers its capabilities, which is what puts it in Settings → Default apps. It does
+/// not take over the default itself: Windows protects the user's choice, so "make Peepr the default" opens
+/// Peepr's page in Default apps, where the user confirms it. Unregistering removes exactly what this wrote.
+/// </summary>
+internal static partial class FileAssociations
+{
+    public const string ImageProgId = "Peepr.Image";
+    public const string VideoProgId = "Peepr.Video";
+
+    private const string AppName = "Peepr";
+    private const string CapabilitiesPath = @"Software\Peepr\Capabilities";
+    private const string RegisteredApplicationsPath = @"Software\RegisteredApplications";
+    private const string ApplicationsPath = @"Software\Classes\Applications\Peepr.exe";
+    private const string ClassesPath = @"Software\Classes";
+
+    public enum Status
+    {
+        NotRegistered,
+        Registered,
+        /// <summary>Registered, but for a Peepr.exe somewhere else (the app was moved or another copy registered).</summary>
+        RegisteredElsewhere,
+    }
+
+    private static string ExePath => Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "Peepr.exe");
+
+    private static string OpenCommand => $"\"{ExePath}\" \"%1\"";
+
+    public static Status GetStatus()
+    {
+        using RegistryKey? command = Registry.CurrentUser.OpenSubKey($@"{ClassesPath}\{ImageProgId}\shell\open\command");
+        if (command?.GetValue(null) is not string registered)
+        {
+            return Status.NotRegistered;
+        }
+        return string.Equals(registered, OpenCommand, StringComparison.OrdinalIgnoreCase)
+            ? Status.Registered
+            : Status.RegisteredElsewhere;
+    }
+
+    public static void Register()
+    {
+        string icon = $"\"{ExePath}\",0";
+        WriteProgId(ImageProgId, "Photo (Peepr)", icon);
+        WriteProgId(VideoProgId, "Video (Peepr)", icon);
+
+        using (RegistryKey application = Registry.CurrentUser.CreateSubKey(ApplicationsPath))
+        {
+            application.SetValue("FriendlyAppName", AppName);
+            using RegistryKey command = application.CreateSubKey(@"shell\open\command");
+            command.SetValue(null, OpenCommand);
+            using RegistryKey supported = application.CreateSubKey("SupportedTypes");
+            foreach (string extension in AllExtensions())
+            {
+                supported.SetValue(extension, "");
+            }
+        }
+
+        using (RegistryKey capabilities = Registry.CurrentUser.CreateSubKey(CapabilitiesPath))
+        {
+            capabilities.SetValue("ApplicationName", AppName);
+            capabilities.SetValue("ApplicationDescription", "A fast, simple viewer for photos and videos.");
+            capabilities.SetValue("ApplicationIcon", icon);
+            using RegistryKey associations = capabilities.CreateSubKey("FileAssociations");
+            foreach (string extension in MediaTypes.ImageExtensions)
+            {
+                associations.SetValue(extension, ImageProgId);
+                AddToOpenWith(extension, ImageProgId);
+            }
+            foreach (string extension in MediaTypes.VideoExtensions)
+            {
+                associations.SetValue(extension, VideoProgId);
+                AddToOpenWith(extension, VideoProgId);
+            }
+        }
+
+        using (RegistryKey registered = Registry.CurrentUser.CreateSubKey(RegisteredApplicationsPath))
+        {
+            registered.SetValue(AppName, CapabilitiesPath);
+        }
+
+        RemovePeeprOneRegistration();
+        NotifyShell();
+    }
+
+    /// <summary>
+    /// Peepr 1 registered one ProgID per extension ("Peepr.AssocFile.JPG"), wrote it as each extension's default
+    /// and added a "peepr:" URL protocol. Left behind they show a second, possibly dead "Peepr" in Open with.
+    /// </summary>
+    private static void RemovePeeprOneRegistration()
+    {
+        foreach (string extension in AllExtensions())
+        {
+            string legacyProgId = "Peepr.AssocFile." + extension.TrimStart('.').ToUpperInvariant();
+            RemoveFromOpenWith(extension, legacyProgId);
+            using (RegistryKey? extensionKey = Registry.CurrentUser.OpenSubKey($@"{ClassesPath}\{extension}", writable: true))
+            {
+                if (extensionKey?.GetValue(null) is string current && current == legacyProgId)
+                {
+                    extensionKey.DeleteValue("", throwOnMissingValue: false);
+                }
+            }
+            Registry.CurrentUser.DeleteSubKeyTree($@"{ClassesPath}\{legacyProgId}", throwOnMissingSubKey: false);
+        }
+
+        bool hasPeeprOneProtocol;
+        using (RegistryKey? protocol = Registry.CurrentUser.OpenSubKey($@"{ClassesPath}\peepr"))
+        {
+            hasPeeprOneProtocol = protocol?.GetValue("URL Protocol") is not null;
+        }
+        if (hasPeeprOneProtocol)
+        {
+            Registry.CurrentUser.DeleteSubKeyTree($@"{ClassesPath}\peepr", throwOnMissingSubKey: false);
+        }
+    }
+
+    public static void Unregister()
+    {
+        foreach (string extension in MediaTypes.ImageExtensions)
+        {
+            RemoveFromOpenWith(extension, ImageProgId);
+        }
+        foreach (string extension in MediaTypes.VideoExtensions)
+        {
+            RemoveFromOpenWith(extension, VideoProgId);
+        }
+
+        Registry.CurrentUser.DeleteSubKeyTree($@"{ClassesPath}\{ImageProgId}", throwOnMissingSubKey: false);
+        Registry.CurrentUser.DeleteSubKeyTree($@"{ClassesPath}\{VideoProgId}", throwOnMissingSubKey: false);
+        Registry.CurrentUser.DeleteSubKeyTree(ApplicationsPath, throwOnMissingSubKey: false);
+        Registry.CurrentUser.DeleteSubKeyTree(@"Software\Peepr", throwOnMissingSubKey: false);
+        using (RegistryKey? registered = Registry.CurrentUser.OpenSubKey(RegisteredApplicationsPath, writable: true))
+        {
+            registered?.DeleteValue(AppName, throwOnMissingValue: false);
+        }
+
+        RemovePeeprOneRegistration();
+        NotifyShell();
+    }
+
+    /// <summary>Opens Peepr's page in Settings → Default apps, where the user can make it the default for everything at once.</summary>
+    public static void OpenDefaultAppsSettings() =>
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo($"ms-settings:defaultapps?registeredAppUser={AppName}")
+        {
+            UseShellExecute = true,
+        });
+
+    private static IEnumerable<string> AllExtensions() => MediaTypes.ImageExtensions.Concat(MediaTypes.VideoExtensions);
+
+    private static void WriteProgId(string progId, string typeName, string icon)
+    {
+        using RegistryKey key = Registry.CurrentUser.CreateSubKey($@"{ClassesPath}\{progId}");
+        key.SetValue(null, typeName);
+        using (RegistryKey defaultIcon = key.CreateSubKey("DefaultIcon"))
+        {
+            defaultIcon.SetValue(null, icon);
+        }
+        using RegistryKey open = key.CreateSubKey(@"shell\open");
+        open.SetValue("FriendlyAppName", AppName);
+        using RegistryKey command = open.CreateSubKey("command");
+        command.SetValue(null, OpenCommand);
+    }
+
+    private static void AddToOpenWith(string extension, string progId)
+    {
+        using RegistryKey openWith = Registry.CurrentUser.CreateSubKey($@"{ClassesPath}\{extension}\OpenWithProgids");
+        openWith.SetValue(progId, Array.Empty<byte>(), RegistryValueKind.None);
+    }
+
+    private static void RemoveFromOpenWith(string extension, string progId)
+    {
+        using RegistryKey? openWith = Registry.CurrentUser.OpenSubKey($@"{ClassesPath}\{extension}\OpenWithProgids", writable: true);
+        openWith?.DeleteValue(progId, throwOnMissingValue: false);
+    }
+
+    private const int ShellChangeAssociations = 0x08000000;
+
+    [LibraryImport("shell32.dll")]
+    private static partial void SHChangeNotify(int eventId, uint flags, nint item1, nint item2);
+
+    // Tells Explorer the associations changed so "Open with" and icons refresh without a sign-out.
+    private static void NotifyShell() => SHChangeNotify(ShellChangeAssociations, 0, 0, 0);
+}
 
 /// <summary>
 /// Sends files to the Windows Recycle Bin and brings them back. Restoring reads the bin's own index files: for

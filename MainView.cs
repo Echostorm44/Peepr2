@@ -26,8 +26,13 @@ internal sealed class MainView : Component
 
     private readonly record struct DeletedFile(string Path, int Index);
 
+    private const float ThumbnailTileSize = 56f;
+    private const float ThumbnailGap = 6f;
+
     private readonly PictureCache pictureCache = new();
+    private readonly ThumbnailCache thumbnails = new();
     private readonly PictureStage stage = new();
+    private bool showThumbnails = PeeprSettings.ShowThumbnailStrip;
     private readonly ImageSource? wallpaper = LoadWallpaper();
     private readonly Stack<DeletedFile> deletedFiles = new();
 
@@ -51,6 +56,7 @@ internal sealed class MainView : Component
     protected override Task OnMounted()
     {
         FileIntake.FilesReceived += OpenPaths;
+        thumbnails.ThumbnailReady += Invalidate;
         IReadOnlyList<string> launchFiles = FileIntake.TakePending();
         if (launchFiles.Count > 0)
         {
@@ -62,6 +68,7 @@ internal sealed class MainView : Component
     protected override void OnUnmounted()
     {
         FileIntake.FilesReceived -= OpenPaths;
+        thumbnails.ThumbnailReady -= Invalidate;
         StopVideo();
         stage.Clear();
         wallpaper?.Dispose();
@@ -548,8 +555,16 @@ internal sealed class MainView : Component
 
     private Task OpenSettingsAsync() => Dialog.ShowAsync(new SettingsView(OnSettingsChanged), new DialogOptions { Title = "Settings" });
 
+    private void ToggleThumbnails()
+    {
+        showThumbnails = !showThumbnails;
+        PeeprSettings.ShowThumbnailStrip = showThumbnails;
+        Invalidate();
+    }
+
     private void OnSettingsChanged()
     {
+        showThumbnails = PeeprSettings.ShowThumbnailStrip;
         folder?.Resort(PeeprSettings.SortOrder);
         PrefetchNeighbours();
         Invalidate();
@@ -689,6 +704,7 @@ internal sealed class MainView : Component
         Bind(KeyCode.O, () => _ = OpenFolderWithPickerAsync(), ModifierKeys.Ctrl | ModifierKeys.Shift, allowRepeat: false),
         Bind(KeyCode.Comma, () => _ = OpenSettingsAsync(), ModifierKeys.Ctrl, allowRepeat: false),
         Bind(KeyCode.R, Rotate, allowRepeat: false),
+        Bind(KeyCode.T, ToggleThumbnails, allowRepeat: false),
         Bind(KeyCode.F5, ToggleSlideshow, allowRepeat: false),
         Bind(KeyCode.Equals, () => Zoom(1.25f)),
         Bind(KeyCode.NumPadAdd, () => Zoom(1.25f)),
@@ -786,8 +802,65 @@ internal sealed class MainView : Component
         new Column(
             spacing: 10,
             crossAxisAlignment: CrossAxisAlignment.Center,
-            children: [new Spacer(), video is { HasVideo: true } ? VideoControls(video) : Node.Empty, Toolbar()])
+            children:
+            [
+                new Spacer(),
+                video is { HasVideo: true } ? VideoControls(video) : Node.Empty,
+                Toolbar(),
+                showThumbnails && folder is { Count: > 1 } ? ThumbnailStrip(folder) : Node.Empty,
+            ])
             .Padding(EdgeInsets.Only(bottom: 22));
+
+    // The files around the current one, as many as fit across the window, following it as you move.
+    private Node ThumbnailStrip(MediaFolder strip)
+    {
+        // The root component has no layout bounds of its own; the window's client area is what there is to fill.
+        float available = MathF.Max(App.Window.ClientBounds.Width - 96f, ThumbnailTileSize);
+        int fits = Math.Max(1, (int)((available + ThumbnailGap) / (ThumbnailTileSize + ThumbnailGap)));
+        int visible = Math.Min(strip.Count, fits);
+        int start = Math.Clamp(strip.CurrentIndex - visible / 2, 0, strip.Count - visible);
+
+        // Nearest first, so the tiles beside the current file fill in before the far ones.
+        thumbnails.Request(Enumerable.Range(start, visible)
+            .OrderBy(i => Math.Abs(i - strip.CurrentIndex))
+            .Select(i => strip.Files[i]));
+
+        var tiles = new Node[visible];
+        for (int i = 0; i < visible; i++)
+        {
+            tiles[i] = ThumbnailTile(strip.Files[start + i], start + i, start + i == strip.CurrentIndex);
+        }
+
+        return new Row(spacing: ThumbnailGap, crossAxisAlignment: CrossAxisAlignment.Center, children: tiles)
+            .Padding(EdgeInsets.All(6))
+            .Background(ToolbarBackground)
+            .CornerRadius(14)
+            .Border(ToolbarHairline, 1, 14)
+            .OnPointerMove(_ => OnPointerActivity());
+    }
+
+    private Node ThumbnailTile(string path, int index, bool current)
+    {
+        Node content = thumbnails.Get(path) is { } image
+            ? new Image(image).Fit(ImageFit.Cover).Size(ThumbnailTileSize, ThumbnailTileSize)
+            : MediaTypes.KindOf(path) == MediaKind.Video
+                ? new Center(new IconView(LucideIcons.Film, size: 22).Color(TextSecondary))
+                : Node.Empty;
+
+        // The ring is its own layer above the picture; a border on the tile itself is painted under it.
+        Node ring = current
+            ? new Column(children: []).Size(ThumbnailTileSize, ThumbnailTileSize).Border(Accent, 2.5f, 8)
+            : Node.Empty;
+
+        return new Stack([content, ring])
+            .Size(ThumbnailTileSize, ThumbnailTileSize)
+            .Background(new ColorValue("#1C1C1E"))
+            .CornerRadius(8)
+            .ClipToBounds(true)
+            .Opacity(current ? 1f : 0.7f)
+            .OnTap(() => NavigateTo(index))
+            .AccessibleLabel(Path.GetFileName(path));
+    }
 
     // Play/pause, elapsed time, a seek bar, time remaining, and sound: the QuickTime arrangement.
     private Node VideoControls(VideoPlayback playback)
@@ -850,6 +923,10 @@ internal sealed class MainView : Component
             buttons.Add(ToolButton(LucideIcons.Copy, () => _ = CopyCurrentAsync(), "Copy (Ctrl+C)", false));
             buttons.Add(ToolButton(LucideIcons.Trash, () => _ = DeleteCurrentAsync(), "Delete (Del)", false));
             buttons.Add(ToolbarDivider());
+        }
+        if (hasFile)
+        {
+            buttons.Add(ToolButton(LucideIcons.Thumbnails, ToggleThumbnails, showThumbnails ? "Hide thumbnails (T)" : "Show thumbnails (T)", false, highlighted: showThumbnails));
         }
         bool fullScreen = App.Window.IsFullScreen;
         buttons.Add(ToolButton(fullScreen ? LucideIcons.Minimize : LucideIcons.Maximize, ToggleFullScreen,

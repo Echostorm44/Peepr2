@@ -59,7 +59,7 @@ internal static class PictureDecoder
         };
     }
 
-    private static bool NeedsOrienting(ImageFrame frame) =>
+    public static bool NeedsOrienting(ImageFrame frame) =>
         frame.Orientation is not (SharpImage.Core.OrientationType.Undefined or SharpImage.Core.OrientationType.TopLeft);
 
     private static bool TryDecodeAnimation(string path, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out DecodedPicture? animation)

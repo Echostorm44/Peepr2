@@ -82,6 +82,16 @@ internal static class LucideIcons
         "M6 5v14",
         "M12 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z");
 
+    public static readonly Icon Film = Create("Video",
+        "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+        "M7 3v18",
+        "M3 7.5h4",
+        "M3 12h18",
+        "M3 16.5h4",
+        "M17 3v18",
+        "M17 7.5h4",
+        "M17 16.5h4");
+
     public static readonly Icon Undo = Create("Undo",
         "M9 14 4 9l5-5",
         "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11");
