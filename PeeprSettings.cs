@@ -53,7 +53,7 @@ internal static class PeeprSettings
 
 /// <summary>
 /// Remembers where the window was: its size (logical pixels), its top-left (physical, virtual-desktop pixels,
-/// which survive monitors with different DPI) and whether it was maximized. A position no longer on any monitor
+/// which survive monitors with different DPI), whether it was maximized and on which monitor. A position no longer on any monitor
 /// is ignored, so a disconnected screen never strands the window off-screen.
 /// </summary>
 internal static class WindowPlacement
@@ -81,15 +81,28 @@ internal static class WindowPlacement
         int x = LocalStorage.Get("windowX", 0, Json.Int32);
         int y = LocalStorage.Get("windowY", 0, Json.Int32);
         // The title bar's left end must land on a monitor that is still there.
-        bool onScreen = App.Screens.All.Any(screen => screen.Bounds.Contains(new Point(x + 40, y + 20)));
+        var titleBar = new Point(x + 40, y + 20);
+        bool onScreen = App.Screens.All.Any(screen => screen.Bounds.Contains(titleBar));
         if (onScreen)
         {
             App.Window.SetScreenPosition(x, y);
         }
-        if (LocalStorage.Get("windowMaximized", false, Json.Boolean))
+
+        if (!LocalStorage.Get("windowMaximized", false, Json.Boolean))
         {
-            App.Window.Maximize();
+            return;
         }
+
+        // Maximized on another monitor than the restored place (Win+Shift+arrow, or dragged there maximized):
+        // open on that monitor, near its top-left, so it maximizes there and un-maximizes there too.
+        var maximizedAt = new Point(
+            LocalStorage.Get("windowMaximizedX", x + 40, Json.Int32), LocalStorage.Get("windowMaximizedY", y + 20, Json.Int32));
+        ScreenInfo? monitor = App.Screens.All.FirstOrDefault(screen => screen.Bounds.Contains(maximizedAt));
+        if (monitor is not null && !(onScreen && monitor.Bounds.Contains(titleBar)))
+        {
+            App.Window.SetScreenPosition((int)monitor.WorkArea.X + 40, (int)monitor.WorkArea.Y + 40);
+        }
+        App.Window.Maximize();
     }
 
     public static void Save()
@@ -104,14 +117,19 @@ internal static class WindowPlacement
         LocalStorage.Set("windowMaximized", maximized, Json.Boolean);
         if (maximized)
         {
-            return; // keep the restored size and place from before it was maximized
+            // Keep the restored size and place from before it was maximized; note only which monitor it fills.
+            Rect filled = App.Window.ScreenBounds;
+            LocalStorage.Set("windowMaximizedX", (int)(filled.X + filled.Width / 2), Json.Int32);
+            LocalStorage.Set("windowMaximizedY", (int)(filled.Y + filled.Height / 2), Json.Int32);
+            return;
         }
 
         // The client size, which is what the window is created at; the outer size would grow by the frame each run.
         Rect client = App.Window.ClientBounds;
         Rect screen = App.Window.ScreenBounds;
-        LocalStorage.Set("windowWidth", (int)client.Width, Json.Int32);
-        LocalStorage.Set("windowHeight", (int)client.Height, Json.Int32);
+        // Rounded: at a fractional DPI scale the logical size isn't whole, and truncating shrank it a pixel a run.
+        LocalStorage.Set("windowWidth", (int)MathF.Round(client.Width), Json.Int32);
+        LocalStorage.Set("windowHeight", (int)MathF.Round(client.Height), Json.Int32);
         LocalStorage.Set("windowX", (int)screen.X, Json.Int32);
         LocalStorage.Set("windowY", (int)screen.Y, Json.Int32);
     }
