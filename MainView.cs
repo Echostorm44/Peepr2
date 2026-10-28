@@ -34,7 +34,9 @@ internal sealed class MainView : Component
     private readonly ThumbnailCache thumbnails = new();
     private readonly PictureStage stage = new();
     private bool showThumbnails = PeeprSettings.ShowThumbnailStrip;
-    private readonly ImageSource? wallpaper = LoadWallpaper();
+    // Decoded only when the welcome screen is shown, off the UI thread: opening a photo never pays for it.
+    private ImageSource? wallpaper;
+    private bool wallpaperRequested;
     private readonly Stack<DeletedFile> deletedFiles = new();
 
     private MediaFolder? folder;
@@ -72,6 +74,10 @@ internal sealed class MainView : Component
         if (launchFiles.Count > 0)
         {
             OpenPaths(launchFiles);
+        }
+        else
+        {
+            EnsureWallpaper();
         }
 
         if (Updater.IsConfigured)
@@ -155,10 +161,24 @@ internal sealed class MainView : Component
         wallpaper?.Dispose();
     }
 
-    private static ImageSource? LoadWallpaper()
+    // Called where the welcome screen is about to show (nothing open at start, or a folder emptied by deleting).
+    private void EnsureWallpaper()
     {
-        using Stream? stream = typeof(MainView).Assembly.GetManifestResourceStream("PeeprBackDrop.png");
-        return stream is null ? null : ImageSource.FromStream(stream);
+        if (!wallpaperRequested)
+        {
+            wallpaperRequested = true;
+            _ = LoadWallpaperAsync();
+        }
+    }
+
+    private async Task LoadWallpaperAsync()
+    {
+        wallpaper = await Task.Run(() =>
+        {
+            using Stream? stream = typeof(MainView).Assembly.GetManifestResourceStream("PeeprBackDrop.png");
+            return stream is null ? null : ImageSource.FromStream(stream);
+        });
+        Invalidate();
     }
 
     // ── Opening and showing files ─────────────────────────────────────
@@ -181,6 +201,7 @@ internal sealed class MainView : Component
         StopVideo();
         if (file is null)
         {
+            EnsureWallpaper();
             stage.Clear();
             loading = false;
             Invalidate();
@@ -439,6 +460,8 @@ internal sealed class MainView : Component
         bool hasFile = folder?.CurrentFile is not null;
         ContextMenu.Show(
         [
+            ContextMenuItem.Action("Reset zoom", ResetZoom, shortcut: "Z", disabled: !stage.IsZoomed),
+            ContextMenuItem.Separator(),
             ContextMenuItem.Action("Copy", () => _ = CopyCurrentAsync(), shortcut: "Ctrl+C", disabled: !hasFile),
             ContextMenuItem.Action("Rotate", Rotate, shortcut: "R", disabled: !stage.HasPicture),
             ContextMenuItem.Action("Show in File Explorer", ShowInExplorer, disabled: !hasFile),
@@ -789,6 +812,7 @@ internal sealed class MainView : Component
         Bind(KeyCode.O, () => _ = OpenFolderWithPickerAsync(), ModifierKeys.Ctrl | ModifierKeys.Shift, allowRepeat: false),
         Bind(KeyCode.Comma, () => _ = OpenSettingsAsync(), ModifierKeys.Ctrl, allowRepeat: false),
         Bind(KeyCode.R, Rotate, allowRepeat: false),
+        Bind(KeyCode.Z, ResetZoom, allowRepeat: false),
         Bind(KeyCode.T, ToggleThumbnails, allowRepeat: false),
         Bind(KeyCode.F5, ToggleSlideshow, allowRepeat: false),
         Bind(KeyCode.Equals, () => Zoom(1.25f)),
@@ -833,7 +857,7 @@ internal sealed class MainView : Component
 
     private Node Viewer()
     {
-        var layers = new List<Node> { stage.Build(Invalidate, OnPointerActivity, OnVideoProgress).OnContextMenu(ShowPictureMenu) };
+        var layers = new List<Node> { stage.Build(Invalidate, OnPointerActivity, OnVideoProgress, ResetZoom).OnContextMenu(ShowPictureMenu) };
         if (loading)
         {
             layers.Add(new Center(new Spinner(28f)).PassThroughHits());

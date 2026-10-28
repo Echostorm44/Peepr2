@@ -39,13 +39,20 @@ internal sealed class SettingsView : Component
             children:
             [
                 Section("Viewing",
-                    Setting("Sort files by",
-                        new Select<SortOrder>(Bind(sortOrder, value =>
-                        {
-                            sortOrder = value;
-                            PeeprSettings.SortOrder = value;
-                            onChanged();
-                        }), SortOptions).Width(250)),
+                    // The dropdown gets its own full-width row: its option names are long.
+                    new Column(
+                        spacing: 8,
+                        crossAxisAlignment: CrossAxisAlignment.Stretch,
+                        children:
+                        [
+                            new Label("Sort files by").Color(TextPrimary),
+                            new Select<SortOrder>(Bind(sortOrder, value =>
+                            {
+                                sortOrder = value;
+                                PeeprSettings.SortOrder = value;
+                                onChanged();
+                            }), SortOptions),
+                        ]),
                     Setting("Slideshow delay",
                         new Row(
                             spacing: 8,
@@ -108,12 +115,19 @@ internal sealed class SettingsView : Component
                     registered
                         ? new Button("Unregister", () => ChangeAssociations(register: false)).Variant("ghost")
                         : new Button("Register", () => ChangeAssociations(register: true)),
-                    new Button("Set as default…", FileAssociations.OpenDefaultAppsSettings)
+                    new Button("Choose defaults in Windows…", FileAssociations.OpenDefaultAppsSettings)
                         .Variant("ghost")
                         .Disabled(!registered)
                         .Tooltip("Opens Peepr's page in Windows Settings → Default apps"),
                 ]),
         };
+        if (registered)
+        {
+            // Windows keeps the default-app choice behind a per-user hash that only its own Settings may write; an
+            // app that edits it directly is reset by Windows at the next sign-in.
+            children.Add(new Label("Windows only lets you pick default apps yourself, in its Settings. Peepr opens its page there.")
+                .FontSize(12).Color(TextSecondary));
+        }
         return new Column(spacing: 10, children: [.. children]);
     }
 

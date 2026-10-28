@@ -125,7 +125,7 @@ internal sealed class PictureStage
     /// is told about pointer movement so the window chrome can show itself; <paramref name="onVideoProgress"/> is
     /// told when a video shows its first frame, moves on a quarter second, or stops.
     /// </summary>
-    public Node Build(Action redraw, Action onActivity, Action onVideoProgress)
+    public Node Build(Action redraw, Action onActivity, Action onVideoProgress, Action onMiddleClick)
     {
         // Only ask for frames while something moves: a still photo, a paused or finished video draw once.
         Action<float>? onFrame = video is { NeedsFrames: true }
@@ -145,6 +145,13 @@ internal sealed class PictureStage
             {
                 pointer = e.Position;
                 onActivity();
+            })
+            .OnPointerUp(e =>
+            {
+                if (e.Button == NativeMouseButton.Middle)
+                {
+                    onMiddleClick();
+                }
             })
             .OnPan(delta =>
             {
