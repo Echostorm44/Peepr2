@@ -51,6 +51,72 @@ internal static class PeeprSettings
     }
 }
 
+/// <summary>
+/// Remembers where the window was: its size (logical pixels), its top-left (physical, virtual-desktop pixels,
+/// which survive monitors with different DPI) and whether it was maximized. A position no longer on any monitor
+/// is ignored, so a disconnected screen never strands the window off-screen.
+/// </summary>
+internal static class WindowPlacement
+{
+    private static readonly SettingsJsonContext Json = SettingsJsonContext.Default;
+
+    /// <summary>The size to open at, or null for the default.</summary>
+    public static Size? SavedSize
+    {
+        get
+        {
+            int width = LocalStorage.Get("windowWidth", 0, Json.Int32);
+            int height = LocalStorage.Get("windowHeight", 0, Json.Int32);
+            return width >= 400 && height >= 300 ? new Size(width, height) : null;
+        }
+    }
+
+    public static void Restore()
+    {
+        if (!LocalStorage.Exists("windowX"))
+        {
+            return;
+        }
+
+        int x = LocalStorage.Get("windowX", 0, Json.Int32);
+        int y = LocalStorage.Get("windowY", 0, Json.Int32);
+        // The title bar's left end must land on a monitor that is still there.
+        bool onScreen = App.Screens.All.Any(screen => screen.Bounds.Contains(new Point(x + 40, y + 20)));
+        if (onScreen)
+        {
+            App.Window.SetScreenPosition(x, y);
+        }
+        if (LocalStorage.Get("windowMaximized", false, Json.Boolean))
+        {
+            App.Window.Maximize();
+        }
+    }
+
+    public static void Save()
+    {
+        // Fullscreen and minimized are moments, not places to come back to.
+        if (App.Window.IsFullScreen || App.Window.IsMinimized)
+        {
+            return;
+        }
+
+        bool maximized = App.Window.IsMaximized;
+        LocalStorage.Set("windowMaximized", maximized, Json.Boolean);
+        if (maximized)
+        {
+            return; // keep the restored size and place from before it was maximized
+        }
+
+        // The client size, which is what the window is created at; the outer size would grow by the frame each run.
+        Rect client = App.Window.ClientBounds;
+        Rect screen = App.Window.ScreenBounds;
+        LocalStorage.Set("windowWidth", (int)client.Width, Json.Int32);
+        LocalStorage.Set("windowHeight", (int)client.Height, Json.Int32);
+        LocalStorage.Set("windowX", (int)screen.X, Json.Int32);
+        LocalStorage.Set("windowY", (int)screen.Y, Json.Int32);
+    }
+}
+
 [JsonSerializable(typeof(int))]
 [JsonSerializable(typeof(bool))]
 [JsonSerializable(typeof(float))]

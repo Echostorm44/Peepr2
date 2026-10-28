@@ -43,7 +43,7 @@ App.Run<MainView>(config =>
 {
     config.Theme = new AppleTheme(ThemeMode.Dark);
     config.SingleInstance = true;
-    config.WindowSize = new Size(1280, 800);
+    config.WindowSize = WindowPlacement.SavedSize ?? new Size(1280, 800);
 });
 
 namespace Peepr

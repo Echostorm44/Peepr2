@@ -59,6 +59,13 @@ internal sealed class MainView : Component
 
     protected override Task OnMounted()
     {
+        WindowPlacement.Restore();
+        App.Window.OnCloseRequested = () =>
+        {
+            WindowPlacement.Save();
+            return CloseResult.Propagate;
+        };
+
         FileIntake.FilesReceived += OpenPaths;
         thumbnails.ThumbnailReady += Invalidate;
         IReadOnlyList<string> launchFiles = FileIntake.TakePending();
