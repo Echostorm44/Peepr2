@@ -5,7 +5,8 @@ namespace Peepr;
 
 /// <summary>
 /// The surface pictures and videos are drawn on. Content opens fitted to the window (a photo is never enlarged
-/// past its own pixels; a video fills the window as players do); the wheel zooms around the cursor, dragging
+/// past its own pixels; a video fills the window as players do), except that a photo following a zoomed photo
+/// opens zoomed onto the same spot; the wheel zooms around the cursor, dragging
 /// pans while zoomed, double-click flips between fit and actual size, and animations play. It owns the textures
 /// of the photos it shows and frees them when the content changes; a video's texture belongs to its
 /// <see cref="VideoPlayback"/>.
@@ -35,6 +36,10 @@ internal sealed class PictureStage
     private float? zoom;
     private Vector2 pan;
     private int quarterTurns;
+    // The zoom a photo was left at, carried to the next one so a spot can be compared across several images:
+    // magnification relative to the window fit, and pan as a fraction of the drawn size. Survives Clear(), which
+    // runs while the next file decodes.
+    private (float OverFit, Vector2 PanFraction)? carriedView;
 
     private Size viewport;
     private float pixelRatio = 1f;
@@ -74,6 +79,7 @@ internal sealed class PictureStage
         pictureHeight = picture.Height;
         quarterTurns = 0;
         ResetZoom();
+        ApplyCarriedView();
     }
 
     /// <summary>Replaces what's on stage with a playing video. The stage draws it but does not own it.</summary>
@@ -302,8 +308,39 @@ internal sealed class PictureStage
         return new Vector2(Math.Clamp(offset.X, -slackX, slackX), Math.Clamp(offset.Y, -slackY, slackY));
     }
 
+    private void ApplyCarriedView()
+    {
+        if (carriedView is not { } view)
+        {
+            return;
+        }
+
+        float fit = FitScale();
+        float next = MathF.Min(fit * view.OverFit, MathF.Max(fit, MaxZoomOverActualSize / pixelRatio));
+        if (next > fit * 1.0001f)
+        {
+            zoom = next;
+            pan = view.PanFraction * new Vector2(ContentWidth * next, ContentHeight * next);
+        }
+    }
+
+    // Remembers the zoom of a photo that is leaving the stage (see carriedView); an unzoomed, rotated or video
+    // view drops it. Nothing is on stage after a Clear(), so a second release keeps what the first one saved.
+    private void CarryView()
+    {
+        if (ContentWidth == 0 || ContentHeight == 0)
+        {
+            return;
+        }
+
+        carriedView = zoom is { } scale && video is null && quarterTurns == 0
+            ? (scale / FitScale(), pan / new Vector2(ContentWidth * scale, ContentHeight * scale))
+            : null;
+    }
+
     private void Release()
     {
+        CarryView();
         foreach (ImageSource frame in frames)
         {
             frame.Dispose();
