@@ -32,6 +32,7 @@ internal sealed class MainView : Component
     private readonly Stack<DeletedFile> deletedFiles = new();
 
     private MediaFolder? folder;
+    private VideoPlayback? video;
     private string? openError;
     private bool loading;
     private int showGeneration;
@@ -61,6 +62,7 @@ internal sealed class MainView : Component
     protected override void OnUnmounted()
     {
         FileIntake.FilesReceived -= OpenPaths;
+        StopVideo();
         stage.Clear();
         wallpaper?.Dispose();
     }
@@ -88,6 +90,7 @@ internal sealed class MainView : Component
         openError = null;
         string? file = folder?.CurrentFile;
         UpdateWindowTitle();
+        StopVideo();
         if (file is null)
         {
             stage.Clear();
@@ -98,10 +101,7 @@ internal sealed class MainView : Component
 
         if (MediaTypes.KindOf(file) == MediaKind.Video)
         {
-            stage.Clear();
-            loading = false;
-            openError = "Video playback arrives in the next build.";
-            Invalidate();
+            await PlayVideoAsync(file, generation);
             PrefetchNeighbours();
             return;
         }
@@ -137,6 +137,127 @@ internal sealed class MainView : Component
         loading = false;
         Invalidate();
         PrefetchNeighbours();
+    }
+
+    private async Task PlayVideoAsync(string file, int generation)
+    {
+        stage.Clear();
+        loading = true;
+        Invalidate();
+
+        VideoPlayback playback;
+        try
+        {
+            playback = await VideoPlayback.OpenAsync(file, PeeprSettings.Muted ? 0f : PeeprSettings.Volume);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (generation == showGeneration)
+            {
+                loading = false;
+                openError = DescribeOpenFailure(ex);
+                Invalidate();
+            }
+            return;
+        }
+
+        if (generation != showGeneration)
+        {
+            // The user moved on while the file was opening.
+            playback.Dispose();
+            return;
+        }
+
+        video = playback;
+        stage.ShowVideo(playback);
+        // The spinner stays until the first frame arrives (OnVideoProgress); a file with only sound has none.
+        loading = playback.HasVideo;
+        if (!playback.HasVideo)
+        {
+            openError = "This file has sound but no picture.";
+        }
+        Invalidate();
+    }
+
+    // The player reports a first frame, a quarter second of progress, or that it stopped: refresh the controls.
+    private void OnVideoProgress()
+    {
+        if (video is null)
+        {
+            return;
+        }
+        if (loading && video.Picture is not null)
+        {
+            loading = false;
+        }
+        if (video.Fault is not null)
+        {
+            openError = "This video stopped playing: part of it couldn't be decoded.";
+        }
+        Invalidate();
+    }
+
+    private void StopVideo()
+    {
+        if (video is null)
+        {
+            return;
+        }
+        stage.Clear();
+        video.Dispose();
+        video = null;
+    }
+
+    private void TogglePlayPause()
+    {
+        if (video is null)
+        {
+            return;
+        }
+        video.TogglePause();
+        Invalidate();
+    }
+
+    private void SeekBy(TimeSpan offset)
+    {
+        if (video is null)
+        {
+            return;
+        }
+        video.SeekTo(video.Position + offset);
+        Invalidate();
+    }
+
+    private void ToggleMute()
+    {
+        PeeprSettings.Muted = !PeeprSettings.Muted;
+        if (video is not null)
+        {
+            video.Volume = PeeprSettings.Muted ? 0f : PeeprSettings.Volume;
+        }
+        Invalidate();
+    }
+
+    private void SetVolume(float volume)
+    {
+        PeeprSettings.Volume = volume;
+        PeeprSettings.Muted = volume <= 0f;
+        if (video is not null)
+        {
+            video.Volume = volume;
+        }
+        Invalidate();
+    }
+
+    // Space plays and pauses a video, and steps to the next file otherwise.
+    private void HandleSpace()
+    {
+        if (video is not null)
+        {
+            TogglePlayPause();
+            return;
+        }
+        Navigate(1);
     }
 
     // The taskbar and Alt+Tab name the file on screen and where it sits in the folder.
@@ -279,10 +400,21 @@ internal sealed class MainView : Component
             }
         }
 
+        // A playing video holds its file open; let go of it before Windows moves it.
+        bool wasPlaying = video is not null && string.Equals(video.FilePath, file, StringComparison.OrdinalIgnoreCase);
+        if (wasPlaying)
+        {
+            StopVideo();
+        }
+
         bool recycled = await Task.Run(() => RecycleBin.Send(file));
         if (!recycled)
         {
             ShowNotice($"Couldn't delete {Path.GetFileName(file)}. Is it open somewhere else?", offerUndo: false);
+            if (wasPlaying)
+            {
+                await ShowCurrentAsync();
+            }
             return;
         }
 
@@ -395,11 +527,16 @@ internal sealed class MainView : Component
         Invalidate();
     }
 
+    // Each photo stays for the chosen delay; a video plays to its end first (or for as long as it is paused).
     private async Task RunSlideshowAsync(int generation)
     {
         while (true)
         {
             await Task.Delay(TimeSpan.FromSeconds(PeeprSettings.SlideshowSeconds), LifetimeToken).ConfigureAwait(true);
+            while (video is { Ended: false, Fault: null } && generation == slideshowGeneration)
+            {
+                await Task.Delay(250, LifetimeToken).ConfigureAwait(true);
+            }
             if (generation != slideshowGeneration || !slideshowRunning)
             {
                 return;
@@ -534,7 +671,10 @@ internal sealed class MainView : Component
         Bind(KeyCode.PageUp, () => Navigate(-1)),
         Bind(KeyCode.Right, () => Navigate(1)),
         Bind(KeyCode.PageDown, () => Navigate(1)),
-        Bind(KeyCode.Space, () => Navigate(1)),
+        Bind(KeyCode.Space, HandleSpace, allowRepeat: false),
+        Bind(KeyCode.Left, () => SeekBy(TimeSpan.FromSeconds(-5)), ModifierKeys.Shift),
+        Bind(KeyCode.Right, () => SeekBy(TimeSpan.FromSeconds(5)), ModifierKeys.Shift),
+        Bind(KeyCode.M, ToggleMute, allowRepeat: false),
         Bind(KeyCode.Home, () => NavigateTo(0)),
         Bind(KeyCode.End, () => NavigateTo(int.MaxValue)),
         Bind(KeyCode.Delete, () => _ = DeleteCurrentAsync(), allowRepeat: false),
@@ -591,7 +731,7 @@ internal sealed class MainView : Component
 
     private Node Viewer()
     {
-        var layers = new List<Node> { stage.Build(Invalidate, OnPointerActivity).OnContextMenu(ShowPictureMenu) };
+        var layers = new List<Node> { stage.Build(Invalidate, OnPointerActivity, OnVideoProgress).OnContextMenu(ShowPictureMenu) };
         if (loading)
         {
             layers.Add(new Center(new Spinner(28f)).PassThroughHits());
@@ -643,9 +783,53 @@ internal sealed class MainView : Component
 
     private Node ToolbarLayer() =>
         new Column(
+            spacing: 10,
             crossAxisAlignment: CrossAxisAlignment.Center,
-            children: [new Spacer(), Toolbar()])
+            children: [new Spacer(), video is { HasVideo: true } ? VideoControls(video) : Node.Empty, Toolbar()])
             .Padding(EdgeInsets.Only(bottom: 22));
+
+    // Play/pause, elapsed time, a seek bar, time remaining, and sound: the QuickTime arrangement.
+    private Node VideoControls(VideoPlayback playback)
+    {
+        double durationSeconds = Math.Max(playback.Duration.TotalSeconds, 0.001);
+        float position = (float)Math.Clamp(playback.Position.TotalSeconds, 0, durationSeconds);
+        bool muted = PeeprSettings.Muted;
+        Icon playIcon = playback.Ended ? LucideIcons.Replay : playback.IsPaused ? LucideIcons.Play : LucideIcons.Pause;
+
+        return new Row(
+            spacing: 10,
+            crossAxisAlignment: CrossAxisAlignment.Center,
+            children:
+            [
+                ToolButton(playIcon, TogglePlayPause, playback.IsPaused || playback.Ended ? "Play (Space)" : "Pause (Space)", false),
+                new Label(FormatTime(playback.Position)).FontSize(12).Color(TextSecondary).Width(52).TextAlign(TextAlignment.End),
+                new Slider(
+                    Bind(position, seconds => playback.SeekTo(TimeSpan.FromSeconds(seconds))),
+                    0f, (float)durationSeconds)
+                    .AccessibleLabel("Position")
+                    .Expand(),
+                new Label("-" + FormatTime(playback.Duration - playback.Position)).FontSize(12).Color(TextSecondary).Width(56),
+                ToolButton(muted ? LucideIcons.VolumeMuted : LucideIcons.Volume, ToggleMute, muted ? "Unmute (M)" : "Mute (M)", false),
+                new Slider(Bind(muted ? 0f : PeeprSettings.Volume, SetVolume), 0f, 1f)
+                    .AccessibleLabel("Volume")
+                    .Width(90),
+            ])
+            .Width(620)
+            .Padding(EdgeInsets.Symmetric(horizontal: 10, vertical: 6))
+            .Background(ToolbarBackground)
+            .CornerRadius(14)
+            .Border(ToolbarHairline, 1, 14)
+            .OnPointerMove(_ => OnPointerActivity());
+    }
+
+    private static string FormatTime(TimeSpan time)
+    {
+        if (time < TimeSpan.Zero)
+        {
+            time = TimeSpan.Zero;
+        }
+        return time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"m\:ss");
+    }
 
     private Node Toolbar()
     {

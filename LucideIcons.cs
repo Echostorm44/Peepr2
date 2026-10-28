@@ -32,6 +32,11 @@ internal static class LucideIcons
         "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8",
         "M21 3v5h-5");
 
+    // Lucide "rotate-ccw": play a finished video again.
+    public static readonly Icon Replay = Create("Play again",
+        "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
+        "M3 3v5h5");
+
     public static readonly Icon Copy = Create("Copy",
         "M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z",
         "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2");

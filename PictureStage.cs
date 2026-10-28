@@ -4,9 +4,11 @@ using Cascade.UI;
 namespace Peepr;
 
 /// <summary>
-/// The surface pictures are drawn on. A picture opens fitted to the window (never enlarged past its own pixels);
-/// the wheel zooms around the cursor, dragging pans a zoomed picture, double-click flips between fit and actual
-/// size, and animations play. It owns its GPU textures and frees them when the picture changes.
+/// The surface pictures and videos are drawn on. Content opens fitted to the window (a photo is never enlarged
+/// past its own pixels; a video fills the window as players do); the wheel zooms around the cursor, dragging
+/// pans while zoomed, double-click flips between fit and actual size, and animations play. It owns the textures
+/// of the photos it shows and frees them when the content changes; a video's texture belongs to its
+/// <see cref="VideoPlayback"/>.
 /// </summary>
 internal sealed class PictureStage
 {
@@ -14,6 +16,8 @@ internal sealed class PictureStage
     // Zoom per wheel notch. Cascade reports one notch as DeltaY = ±1 (positive = away from you = zoom in);
     // trackpads report fractions, which this scales smoothly.
     private const float WheelZoomStep = 1.18f;
+    // How often (in video time) the video controls are re-rendered to move the seek bar along.
+    private const long ProgressStepTicks = TimeSpan.TicksPerSecond / 4;
 
     private ImageSource[] frames = [];
     private int[] frameDurationsMs = [];
@@ -22,7 +26,10 @@ internal sealed class PictureStage
     private int pictureWidth;
     private int pictureHeight;
 
-    // Logical units per picture pixel while zoomed; null while fitted to the window.
+    private VideoPlayback? video;
+    private long lastReportedProgress = -1;
+
+    // Logical units per content pixel while zoomed; null while fitted to the window.
     private float? zoom;
     private Vector2 pan;
     private int quarterTurns;
@@ -31,15 +38,16 @@ internal sealed class PictureStage
     private float pixelRatio = 1f;
     private Point pointer;
 
-    public bool HasPicture => frames.Length > 0;
+    /// <summary>True when something is on stage to draw: a photo, or a video that has shown its first frame.</summary>
+    public bool HasPicture => frames.Length > 0 || video?.Picture is not null;
 
     public bool IsZoomed => zoom is not null;
 
-    public int PictureWidth => pictureWidth;
+    private int ContentWidth => video?.VideoWidth ?? pictureWidth;
 
-    public int PictureHeight => pictureHeight;
+    private int ContentHeight => video?.VideoHeight ?? pictureHeight;
 
-    /// <summary>Replaces what's on stage, uploading every frame of <paramref name="picture"/>.</summary>
+    /// <summary>Replaces what's on stage with a photo, uploading every frame of <paramref name="picture"/>.</summary>
     public void Show(DecodedPicture picture)
     {
         var uploaded = new ImageSource[picture.Frames.Length];
@@ -54,6 +62,16 @@ internal sealed class PictureStage
         frameDurationsMs = picture.FrameDurationsMs;
         pictureWidth = picture.Width;
         pictureHeight = picture.Height;
+        quarterTurns = 0;
+        ResetZoom();
+    }
+
+    /// <summary>Replaces what's on stage with a playing video. The stage draws it but does not own it.</summary>
+    public void ShowVideo(VideoPlayback playback)
+    {
+        Release();
+        video = playback;
+        lastReportedProgress = -1;
         quarterTurns = 0;
         ResetZoom();
     }
@@ -76,7 +94,7 @@ internal sealed class PictureStage
     public void ZoomBy(float factor) =>
         ZoomAround(factor, new Point(viewport.Width / 2f, viewport.Height / 2f));
 
-    /// <summary>Fit ↔ actual size (1 picture pixel per screen pixel), centred on <paramref name="at"/>.</summary>
+    /// <summary>Fit ↔ actual size (1 content pixel per screen pixel), centred on <paramref name="at"/>.</summary>
     public void ToggleActualSize(Point at)
     {
         if (zoom is not null)
@@ -87,18 +105,23 @@ internal sealed class PictureStage
 
         float fit = FitScale();
         float actual = 1f / pixelRatio;
-        // A picture already shown at actual size has nothing to zoom to; go to double instead.
-        float target = actual > fit * 1.01f ? actual : actual * 2f;
+        // Content already shown at (or past) actual size has nothing to zoom to; go to double instead.
+        float target = actual > fit * 1.01f ? actual : fit * 2f;
         ZoomAround(target / fit, at);
     }
 
     /// <summary>
     /// The stage as a node. <paramref name="redraw"/> re-renders after a view change; <paramref name="onActivity"/>
-    /// is told about pointer movement so the window chrome can show itself.
+    /// is told about pointer movement so the window chrome can show itself; <paramref name="onVideoProgress"/> is
+    /// told when a video shows its first frame, moves on a quarter second, or stops.
     /// </summary>
-    public Node Build(Action redraw, Action onActivity)
+    public Node Build(Action redraw, Action onActivity, Action onVideoProgress)
     {
-        Action<float>? onFrame = frames.Length > 1 ? AdvanceAnimation : null;
+        // Only ask for frames while something moves: a still photo, a paused or finished video draw once.
+        Action<float>? onFrame = video is { NeedsFrames: true }
+            ? _ => PumpVideo(onVideoProgress)
+            : frames.Length > 1 ? AdvanceAnimation : null;
+
         return CanvasFactory.Canvas(Size.Fill, Draw, onFrame)
             .OnScroll(delta =>
             {
@@ -115,7 +138,7 @@ internal sealed class PictureStage
             })
             .OnPan(delta =>
             {
-                // A drag while zoomed moves the picture with the pointer.
+                // A drag while zoomed moves the content with the pointer.
                 if (zoom is not null)
                 {
                     pan += new Vector2(delta.X, delta.Y);
@@ -130,6 +153,22 @@ internal sealed class PictureStage
                     redraw();
                 }
             });
+    }
+
+    private void PumpVideo(Action onVideoProgress)
+    {
+        if (video is null)
+        {
+            return;
+        }
+
+        bool firstPicture = video.PumpFrame();
+        long progress = video.Position.Ticks / ProgressStepTicks;
+        if (firstPicture || progress != lastReportedProgress || !video.NeedsFrames)
+        {
+            lastReportedProgress = progress;
+            onVideoProgress();
+        }
     }
 
     private void AdvanceAnimation(float deltaSeconds)
@@ -151,49 +190,55 @@ internal sealed class PictureStage
     {
         viewport = size;
         pixelRatio = context.PixelRatio > 0 ? context.PixelRatio : 1f;
-        if (frames.Length == 0)
+        ImageSource? texture = video is not null ? video.Picture : frames.Length > 0 ? frames[frameIndex] : null;
+        if (texture is null || ContentWidth == 0 || ContentHeight == 0)
         {
             return;
         }
 
         float scale = zoom ?? FitScale();
-        float width = pictureWidth * scale;
-        float height = pictureHeight * scale;
+        float width = ContentWidth * scale;
+        float height = ContentHeight * scale;
         bool sideways = (quarterTurns & 1) == 1;
         pan = ClampPan(pan, sideways ? height : width, sideways ? width : height);
 
-        // Snap the picture's corner to a device pixel so actual size is pixel-exact rather than smeared.
+        // The player scales frames down to what is drawn; zooming in asks it for more pixels.
+        video?.SetDisplaySize((int)MathF.Ceiling(width * pixelRatio), (int)MathF.Ceiling(height * pixelRatio));
+
+        // Snap the corner to a device pixel so actual size is pixel-exact rather than smeared.
         float left = Snap((size.Width - width) / 2f + pan.X);
         float top = Snap((size.Height - height) / 2f + pan.Y);
-        ImageSource frame = frames[frameIndex];
 
         if (quarterTurns == 0)
         {
-            context.DrawImage(frame, new Rect(left, top, width, height));
+            context.DrawImage(texture, new Rect(left, top, width, height));
             return;
         }
 
         float centerX = left + width / 2f;
         float centerY = top + height / 2f;
         using var turn = context.PushRotate(Angle.Degrees(90f * quarterTurns), new Point(centerX, centerY));
-        context.DrawImage(frame, new Rect(left, top, width, height));
+        context.DrawImage(texture, new Rect(left, top, width, height));
     }
 
     private float Snap(float value) => MathF.Round(value * pixelRatio) / pixelRatio;
 
-    // The scale that fits the (possibly rotated) picture in the window, never enlarging past actual pixels.
+    // The scale that fits the (possibly rotated) content in the window. Photos are never enlarged past their
+    // own pixels; video fills the window.
     private float FitScale()
     {
-        if (pictureWidth == 0 || viewport.Width <= 0 || viewport.Height <= 0)
+        int contentWidth = ContentWidth;
+        int contentHeight = ContentHeight;
+        if (contentWidth == 0 || contentHeight == 0 || viewport.Width <= 0 || viewport.Height <= 0)
         {
             return 1f;
         }
 
         bool sideways = (quarterTurns & 1) == 1;
-        float width = sideways ? pictureHeight : pictureWidth;
-        float height = sideways ? pictureWidth : pictureHeight;
+        float width = sideways ? contentHeight : contentWidth;
+        float height = sideways ? contentWidth : contentHeight;
         float fit = MathF.Min(viewport.Width / width, viewport.Height / height);
-        return MathF.Min(fit, 1f / pixelRatio);
+        return video is not null ? fit : MathF.Min(fit, 1f / pixelRatio);
     }
 
     private void ZoomAround(float factor, Point at)
@@ -205,7 +250,7 @@ internal sealed class PictureStage
 
         float fit = FitScale();
         float current = zoom ?? fit;
-        float next = Math.Clamp(current * factor, fit, MaxZoomOverActualSize / pixelRatio);
+        float next = Math.Clamp(current * factor, fit, MathF.Max(fit, MaxZoomOverActualSize / pixelRatio));
         if (next <= fit * 1.0001f)
         {
             // Zoomed back out to the window: return to fit, which follows window resizes.
@@ -213,13 +258,13 @@ internal sealed class PictureStage
             return;
         }
 
-        // Keep the picture point under the cursor where it is.
+        // Keep the content point under the cursor where it is.
         var fromCenter = new Vector2(at.X - viewport.Width / 2f, at.Y - viewport.Height / 2f) - pan;
         pan += fromCenter - fromCenter * (next / current);
         zoom = next;
     }
 
-    // A picture larger than the window can pan until its edge meets the window's; a smaller one stays centred.
+    // Content larger than the window can pan until its edge meets the window's; smaller content stays centred.
     private Vector2 ClampPan(Vector2 offset, float drawnWidth, float drawnHeight)
     {
         float slackX = MathF.Max(0f, (drawnWidth - viewport.Width) / 2f);
@@ -239,5 +284,6 @@ internal sealed class PictureStage
         frameElapsedMs = 0;
         pictureWidth = 0;
         pictureHeight = 0;
+        video = null;
     }
 }
