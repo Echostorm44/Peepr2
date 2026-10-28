@@ -20,6 +20,8 @@ internal sealed class PictureStage
     private const long ProgressStepTicks = TimeSpan.TicksPerSecond / 4;
 
     private ImageSource[] frames = [];
+    // Halved copies of a large still, largest first (see DecodedPicture.SmallerLevels).
+    private ImageSource[] smallerLevels = [];
     private int[] frameDurationsMs = [];
     private int frameIndex;
     private float frameElapsedMs;
@@ -57,8 +59,16 @@ internal sealed class PictureStage
             uploaded[i] = ImageSource.FromPixels(picture.Frames[i], picture.Width, picture.Height);
         }
 
+        var levels = new ImageSource[picture.SmallerLevels.Length];
+        for (int i = 0; i < levels.Length; i++)
+        {
+            PictureLevel level = picture.SmallerLevels[i];
+            levels[i] = ImageSource.FromPixels(level.Pixels, level.Width, level.Height);
+        }
+
         Release();
         frames = uploaded;
+        smallerLevels = levels;
         frameDurationsMs = picture.FrameDurationsMs;
         pictureWidth = picture.Width;
         pictureHeight = picture.Height;
@@ -205,6 +215,19 @@ internal sealed class PictureStage
         // The player scales frames down to what is drawn; zooming in asks it for more pixels.
         video?.SetDisplaySize((int)MathF.Ceiling(width * pixelRatio), (int)MathF.Ceiling(height * pixelRatio));
 
+        // A large still drawn small uses the smallest halved copy that still has a texel per device pixel, so the
+        // GPU never minifies more than 2:1 and the picture stays smooth instead of shimmering. Zooming in climbs
+        // back to the full-size texture, which is only uploaded once it is needed.
+        float deviceWidth = width * pixelRatio;
+        foreach (ImageSource level in smallerLevels)
+        {
+            if (level.Width < deviceWidth)
+            {
+                break;
+            }
+            texture = level;
+        }
+
         // Snap the corner to a device pixel so actual size is pixel-exact rather than smeared.
         float left = Snap((size.Width - width) / 2f + pan.X);
         float top = Snap((size.Height - height) / 2f + pan.Y);
@@ -278,7 +301,12 @@ internal sealed class PictureStage
         {
             frame.Dispose();
         }
+        foreach (ImageSource level in smallerLevels)
+        {
+            level.Dispose();
+        }
         frames = [];
+        smallerLevels = [];
         frameDurationsMs = [];
         frameIndex = 0;
         frameElapsedMs = 0;

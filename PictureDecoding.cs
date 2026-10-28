@@ -17,8 +17,17 @@ internal sealed class DecodedPicture
     public required byte[][] Frames { get; init; }
     public required int[] FrameDurationsMs { get; init; }
 
+    /// <summary>
+    /// Successively halved copies of a large still (largest first, not including the full size), for drawing it
+    /// small without aliasing — the GPU has no mipmaps for it. Empty for animations and pictures that already fit.
+    /// </summary>
+    public PictureLevel[] SmallerLevels { get; init; } = [];
+
     public bool IsAnimated => Frames.Length > 1;
 }
+
+/// <summary>One RGBA8 copy of a picture at a reduced size.</summary>
+internal readonly record struct PictureLevel(byte[] Pixels, int Width, int Height);
 
 /// <summary>Turns image files into <see cref="DecodedPicture"/>s through SharpImage. Thread-safe; runs off the UI thread.</summary>
 internal static class PictureDecoder
@@ -49,14 +58,72 @@ internal static class PictureDecoder
         using ImageFrame decoded = FormatRegistry.Decode(data, format);
         using ImageFrame? oriented = NeedsOrienting(decoded) ? Geometry.AutoOrient(decoded) : null;
         ImageFrame frame = oriented ?? decoded;
+        int width = (int)frame.Columns;
+        int height = (int)frame.Rows;
+        byte[] pixels = ToRgba(frame);
 
         return new DecodedPicture
         {
-            Width = (int)frame.Columns,
-            Height = (int)frame.Rows,
-            Frames = [ToRgba(frame)],
+            Width = width,
+            Height = height,
+            Frames = [pixels],
             FrameDurationsMs = [0],
+            SmallerLevels = BuildSmallerLevels(pixels, width, height),
         };
+    }
+
+    // Halving stops once a level fits in this on both sides: a screen-sized picture of a large photo.
+    private const int SmallestLevelEdge = 2048;
+
+    /// <summary>
+    /// Halves the picture until it fits in <see cref="SmallestLevelEdge"/>. Each level is a 2×2 box average of the
+    /// one above, so drawing any size takes at most a 2:1 bilinear step from the nearest larger level — what
+    /// mipmapping does on a GPU.
+    /// </summary>
+    internal static PictureLevel[] BuildSmallerLevels(byte[] pixels, int width, int height)
+    {
+        var levels = new List<PictureLevel>();
+        while (width > SmallestLevelEdge || height > SmallestLevelEdge)
+        {
+            (pixels, width, height) = HalveRgba(pixels, width, height);
+            levels.Add(new PictureLevel(pixels, width, height));
+            if (width == 1 && height == 1)
+            {
+                break;
+            }
+        }
+        return [.. levels];
+    }
+
+    /// <summary>A half-size copy: each output pixel is the rounded mean of the 2×2 block it covers (edges clamp).</summary>
+    internal static (byte[] Pixels, int Width, int Height) HalveRgba(byte[] source, int width, int height)
+    {
+        int halfWidth = Math.Max(1, width / 2);
+        int halfHeight = Math.Max(1, height / 2);
+        var half = GC.AllocateUninitializedArray<byte>(halfWidth * halfHeight * 4);
+        int sourceStride = width * 4;
+
+        for (int y = 0; y < halfHeight; y++)
+        {
+            int top = Math.Min(y * 2, height - 1) * sourceStride;
+            int bottom = Math.Min(y * 2 + 1, height - 1) * sourceStride;
+            ReadOnlySpan<byte> upper = source.AsSpan(top, sourceStride);
+            ReadOnlySpan<byte> lower = source.AsSpan(bottom, sourceStride);
+            Span<byte> output = half.AsSpan(y * halfWidth * 4, halfWidth * 4);
+
+            for (int x = 0; x < halfWidth; x++)
+            {
+                int left = Math.Min(x * 2, width - 1) * 4;
+                int right = Math.Min(x * 2 + 1, width - 1) * 4;
+                int target = x * 4;
+                for (int channel = 0; channel < 4; channel++)
+                {
+                    output[target + channel] = (byte)((upper[left + channel] + upper[right + channel]
+                        + lower[left + channel] + lower[right + channel] + 2) >> 2);
+                }
+            }
+        }
+        return (half, halfWidth, halfHeight);
     }
 
     public static bool NeedsOrienting(ImageFrame frame) =>

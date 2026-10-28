@@ -129,6 +129,43 @@ internal sealed class PictureDecoderTests
     }
 
     [Test]
+    public async Task HalveRgba_AveragesEachTwoByTwoBlock()
+    {
+        // 2×2 → 1×1: channel values 0, 10, 20, 30 average (with rounding) to 15.
+        byte[] source =
+        [
+            0, 0, 0, 255,    10, 10, 10, 255,
+            20, 20, 20, 255, 30, 30, 30, 255,
+        ];
+
+        var (half, width, height) = PictureDecoder.HalveRgba(source, 2, 2);
+
+        await Assert.That(width).IsEqualTo(1);
+        await Assert.That(height).IsEqualTo(1);
+        await Assert.That(half).IsEquivalentTo(new byte[] { 15, 15, 15, 255 }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task HalveRgba_OddSizes_ClampAtTheEdges()
+    {
+        var (_, width, height) = PictureDecoder.HalveRgba(new byte[5 * 3 * 4], 5, 3);
+
+        await Assert.That(width).IsEqualTo(2);
+        await Assert.That(height).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SmallerLevels_StopOnceTheyFitAScreen()
+    {
+        var levels = PictureDecoder.BuildSmallerLevels(new byte[5000 * 100 * 4], 5000, 100);
+
+        await Assert.That(levels.Length).IsEqualTo(2);
+        await Assert.That(levels[0].Width).IsEqualTo(2500);
+        await Assert.That(levels[1].Width).IsEqualTo(1250);
+        await Assert.That(PictureDecoder.BuildSmallerLevels(new byte[2048 * 10 * 4], 2048, 10)).IsEmpty();
+    }
+
+    [Test]
     public async Task Decode_RejectsAFileThatIsNotAnImage()
     {
         string path = Path.Combine(Path.GetTempPath(), "peepr-test-" + Guid.NewGuid().ToString("N") + ".jpg");
