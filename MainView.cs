@@ -13,6 +13,7 @@ internal sealed class MainView : Component
 {
     // ── Palette (Apple dark) ──────────────────────────────────────────
     private static readonly ColorValue StageBackground = new("#1E1E1E");
+    private static readonly ColorValue FullScreenBackground = new("#000000");
     private static readonly ColorValue ToolbarBackground = new("#2C2C2EE8");
     private static readonly ColorValue ToolbarHairline = new("#FFFFFF1A");
     private static readonly ColorValue Divider = new("#FFFFFF24");
@@ -86,6 +87,7 @@ internal sealed class MainView : Component
         int generation = ++showGeneration;
         openError = null;
         string? file = folder?.CurrentFile;
+        UpdateWindowTitle();
         if (file is null)
         {
             stage.Clear();
@@ -135,6 +137,15 @@ internal sealed class MainView : Component
         loading = false;
         Invalidate();
         PrefetchNeighbours();
+    }
+
+    // The taskbar and Alt+Tab name the file on screen and where it sits in the folder.
+    private void UpdateWindowTitle()
+    {
+        string? file = folder?.CurrentFile;
+        App.Window.Title = file is null
+            ? "Peepr"
+            : $"{Path.GetFileName(file)} — {folder!.CurrentIndex + 1} of {folder.Count}";
     }
 
     private static string DescribeOpenFailure(Exception ex) => ex switch
@@ -194,6 +205,53 @@ internal sealed class MainView : Component
         {
             OpenPaths([result.Path]);
         }
+    }
+
+    // Opens a whole folder, starting from its first file in the chosen sort order.
+    private async Task OpenFolderWithPickerAsync()
+    {
+        string? directory = await FolderPicker.OpenAsync("Open folder", folder?.Directory);
+        if (directory is not null)
+        {
+            OpenPaths([directory]);
+        }
+    }
+
+    private void ShowOpenMenu() =>
+        ContextMenu.Show(
+        [
+            ContextMenuItem.Action("Open file…", () => _ = OpenWithPickerAsync(), shortcut: "Ctrl+O"),
+            ContextMenuItem.Action("Open folder…", () => _ = OpenFolderWithPickerAsync(), shortcut: "Ctrl+Shift+O"),
+        ]);
+
+    private void ShowPictureMenu()
+    {
+        bool hasFile = folder?.CurrentFile is not null;
+        ContextMenu.Show(
+        [
+            ContextMenuItem.Action("Copy", () => _ = CopyCurrentAsync(), shortcut: "Ctrl+C", disabled: !hasFile),
+            ContextMenuItem.Action("Rotate", Rotate, shortcut: "R", disabled: !stage.HasPicture),
+            ContextMenuItem.Action("Show in File Explorer", ShowInExplorer, disabled: !hasFile),
+            ContextMenuItem.Separator(),
+            ContextMenuItem.Action("Delete", () => _ = DeleteCurrentAsync(), MenuItemStyle.Destructive, shortcut: "Del", disabled: !hasFile),
+            ContextMenuItem.Separator(),
+            ContextMenuItem.Action("Open file…", () => _ = OpenWithPickerAsync(), shortcut: "Ctrl+O"),
+            ContextMenuItem.Action("Open folder…", () => _ = OpenFolderWithPickerAsync(), shortcut: "Ctrl+Shift+O"),
+        ]);
+    }
+
+    private void ShowInExplorer()
+    {
+        if (folder?.CurrentFile is { } file)
+        {
+            System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{file}\"");
+        }
+    }
+
+    private void ToggleFullScreen()
+    {
+        App.Window.ToggleFullScreen();
+        Invalidate();
     }
 
     // ── Actions ───────────────────────────────────────────────────────
@@ -359,8 +417,18 @@ internal sealed class MainView : Component
         Invalidate();
     }
 
+    // Esc backs out one level at a time: fullscreen (and its slideshow), slideshow, zoom, then the app.
     private void HandleEscape()
     {
+        if (App.Window.IsFullScreen)
+        {
+            if (slideshowRunning)
+            {
+                StopSlideshow();
+            }
+            ToggleFullScreen();
+            return;
+        }
         if (slideshowRunning)
         {
             StopSlideshow();
@@ -447,16 +515,16 @@ internal sealed class MainView : Component
         var layers = new List<Node> { content };
         if (folder is not null && !folder.IsEmpty)
         {
-            layers.Add(new AnimatePresence(chromeVisible, SideArrows()));
+            layers.Add(new AnimatePresence(chromeVisible, SideArrows()).PassThroughHits());
         }
-        layers.Add(new AnimatePresence(chromeVisible || folder is null, ToolbarLayer()));
+        layers.Add(new AnimatePresence(chromeVisible || folder is null, ToolbarLayer()).PassThroughHits());
         if (notice is not null)
         {
-            layers.Add(NoticeLayer());
+            layers.Add(NoticeLayer().PassThroughHits());
         }
 
         return new KeyHandler(
-            new Stack([.. layers]).Background(StageBackground),
+            new Stack([.. layers]).Background(App.Window.IsFullScreen ? FullScreenBackground : StageBackground),
             KeyBindings());
     }
 
@@ -472,7 +540,12 @@ internal sealed class MainView : Component
         Bind(KeyCode.Delete, () => _ = DeleteCurrentAsync(), allowRepeat: false),
         Bind(KeyCode.Z, () => _ = UndoDeleteAsync(), ModifierKeys.Ctrl, allowRepeat: false),
         Bind(KeyCode.C, () => _ = CopyCurrentAsync(), ModifierKeys.Ctrl, allowRepeat: false),
+        Bind(KeyCode.BrowserBack, () => Navigate(-1)),
+        Bind(KeyCode.BrowserForward, () => Navigate(1)),
+        Bind(KeyCode.F11, ToggleFullScreen, allowRepeat: false),
+        Bind(KeyCode.F, ToggleFullScreen, allowRepeat: false),
         Bind(KeyCode.O, () => _ = OpenWithPickerAsync(), ModifierKeys.Ctrl, allowRepeat: false),
+        Bind(KeyCode.O, () => _ = OpenFolderWithPickerAsync(), ModifierKeys.Ctrl | ModifierKeys.Shift, allowRepeat: false),
         Bind(KeyCode.Comma, () => _ = OpenSettingsAsync(), ModifierKeys.Ctrl, allowRepeat: false),
         Bind(KeyCode.R, Rotate, allowRepeat: false),
         Bind(KeyCode.F5, ToggleSlideshow, allowRepeat: false),
@@ -498,25 +571,34 @@ internal sealed class MainView : Component
             backdrop,
             new Column(
                 crossAxisAlignment: CrossAxisAlignment.Center,
+                spacing: 14,
                 children:
                 [
                     new Spacer(),
-                    new Label("Drop photos or videos here, or press Ctrl+O")
+                    new Row(
+                        spacing: 10,
+                        mainAxisAlignment: MainAxisAlignment.Center,
+                        children:
+                        [
+                            new Button("Open file", () => _ = OpenWithPickerAsync()).Height(36),
+                            new Button("Open folder", () => _ = OpenFolderWithPickerAsync()).Variant("ghost").Height(36),
+                        ]),
+                    new Label("or drop photos, videos or a folder here")
                         .FontSize(13).Color(TextSecondary),
-                ]).Padding(EdgeInsets.Only(bottom: 120)),
+                ]).Padding(EdgeInsets.Only(bottom: 110)),
         ]).WindowDragArea();
     }
 
     private Node Viewer()
     {
-        var layers = new List<Node> { stage.Build(Invalidate, OnPointerActivity) };
+        var layers = new List<Node> { stage.Build(Invalidate, OnPointerActivity).OnContextMenu(ShowPictureMenu) };
         if (loading)
         {
-            layers.Add(new Center(new Spinner(28f)));
+            layers.Add(new Center(new Spinner(28f)).PassThroughHits());
         }
         else if (openError is not null)
         {
-            layers.Add(OpenErrorView(openError));
+            layers.Add(OpenErrorView(openError).PassThroughHits());
         }
         return new Stack([.. layers]);
     }
@@ -584,7 +666,10 @@ internal sealed class MainView : Component
             buttons.Add(ToolButton(LucideIcons.Trash, () => _ = DeleteCurrentAsync(), "Delete (Del)", false));
             buttons.Add(ToolbarDivider());
         }
-        buttons.Add(ToolButton(LucideIcons.FolderOpen, () => _ = OpenWithPickerAsync(), "Open (Ctrl+O)", false));
+        bool fullScreen = App.Window.IsFullScreen;
+        buttons.Add(ToolButton(fullScreen ? LucideIcons.Minimize : LucideIcons.Maximize, ToggleFullScreen,
+            fullScreen ? "Exit full screen (Esc)" : "Full screen (F11)", false));
+        buttons.Add(ToolButton(LucideIcons.FolderOpen, ShowOpenMenu, "Open (Ctrl+O, Ctrl+Shift+O)", false));
         buttons.Add(ToolButton(LucideIcons.Settings, () => _ = OpenSettingsAsync(), "Settings (Ctrl+,)", false));
 
         return new Row(spacing: 2, crossAxisAlignment: CrossAxisAlignment.Center, children: [.. buttons])

@@ -31,7 +31,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.45" />
+    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.46-local.3" />
     <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.1" />
     <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.1" />
   </ItemGroup>

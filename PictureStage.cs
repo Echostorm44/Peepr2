@@ -11,7 +11,9 @@ namespace Peepr;
 internal sealed class PictureStage
 {
     private const float MaxZoomOverActualSize = 32f;
-    private const float WheelZoomStep = 1.0015f;
+    // Zoom per wheel notch. Cascade reports one notch as DeltaY = ±1 (positive = away from you = zoom in);
+    // trackpads report fractions, which this scales smoothly.
+    private const float WheelZoomStep = 1.18f;
 
     private ImageSource[] frames = [];
     private int[] frameDurationsMs = [];
@@ -28,7 +30,6 @@ internal sealed class PictureStage
     private Size viewport;
     private float pixelRatio = 1f;
     private Point pointer;
-    private bool dragging;
 
     public bool HasPicture => frames.Length > 0;
 
@@ -44,7 +45,8 @@ internal sealed class PictureStage
         var uploaded = new ImageSource[picture.Frames.Length];
         for (int i = 0; i < uploaded.Length; i++)
         {
-            uploaded[i] = ImageSource.FromBytes(picture.Frames[i], picture.Width, picture.Height);
+            // Shares the decoded buffer with the renderer rather than copying it.
+            uploaded[i] = ImageSource.FromPixels(picture.Frames[i], picture.Width, picture.Height);
         }
 
         Release();
@@ -102,26 +104,24 @@ internal sealed class PictureStage
             {
                 if (HasPicture && delta.Y != 0)
                 {
-                    ZoomAround(MathF.Pow(WheelZoomStep, -delta.Y), pointer);
+                    ZoomAround(MathF.Pow(WheelZoomStep, delta.Y), pointer);
                     redraw();
                 }
             })
             .OnPointerMove(e =>
             {
                 pointer = e.Position;
-                if (dragging && zoom is not null)
-                {
-                    pan += new Vector2(e.Delta.X, e.Delta.Y);
-                    redraw();
-                }
                 onActivity();
             })
-            .OnPointerDown(e =>
+            .OnPan(delta =>
             {
-                pointer = e.Position;
-                dragging = true;
+                // A drag while zoomed moves the picture with the pointer.
+                if (zoom is not null)
+                {
+                    pan += new Vector2(delta.X, delta.Y);
+                    redraw();
+                }
             })
-            .OnPointerUp(_ => dragging = false)
             .OnDoubleTap(() =>
             {
                 if (HasPicture)
