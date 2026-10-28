@@ -307,8 +307,44 @@ internal sealed class PictureCache
             {
                 decodes.Remove(path);
             }
+            MemoryRelief.AfterLargeRelease();
         }
     }
 
     public void Forget(string path) => decodes.Remove(path);
+}
+
+/// <summary>
+/// Gives memory back promptly after Peepr drops something big. Decoded photos and video frame pools live on the
+/// large object heap, which is only swept by a full collection; on a machine with plenty of RAM the runtime can
+/// leave hundreds of megabytes of them dead for minutes. Peepr knows the moments it lets go of a photo or a
+/// video, so it asks for a background (non-blocking) full collection then, at most once a second.
+/// </summary>
+internal static class MemoryRelief
+{
+    private const long MinimumIntervalMs = 1000;
+    private static long lastCollectionTicks = -MinimumIntervalMs;
+
+    /// <summary>A decoded photo left the cache: sweep in the background, at most once a second.</summary>
+    public static void AfterLargeRelease()
+    {
+        long now = Environment.TickCount64;
+        if (now - lastCollectionTicks < MinimumIntervalMs)
+        {
+            return;
+        }
+        lastCollectionTicks = now;
+        GC.Collect(2, GCCollectionMode.Forced, blocking: false);
+    }
+
+    /// <summary>
+    /// A video closed, dropping its decoder's frame pool (~100 MB at 1080p). A background sweep frees the
+    /// objects but the runtime keeps the pages committed; an aggressive collection compacts and hands them back
+    /// to Windows. It blocks for a few milliseconds, which nobody sees while the next file is opening.
+    /// </summary>
+    public static void AfterVideoClosed()
+    {
+        lastCollectionTicks = Environment.TickCount64;
+        GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+    }
 }

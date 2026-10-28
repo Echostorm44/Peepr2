@@ -206,6 +206,7 @@ internal sealed class MainView : Component
         stage.Clear();
         video.Dispose();
         video = null;
+        MemoryRelief.AfterVideoClosed();
     }
 
     private void TogglePlayPause()

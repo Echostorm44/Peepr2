@@ -31,13 +31,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.46-local.3" />
-    <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.2-local.1" />
-    <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.2-local.1" />
+    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.46-local.4" />
+    <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.2-local.2" />
+    <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.2-local.2" />
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Assets\PeeprBackDrop.png" LogicalName="PeeprBackDrop.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Favour a small footprint over the last few percent of allocation speed: a viewer sits open for hours.
+         Native AOT compiles this into the executable. -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
   </ItemGroup>
 
 </Project>
