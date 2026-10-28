@@ -25,7 +25,7 @@ internal sealed class SettingsView : Component
     private int slideshowSeconds = PeeprSettings.SlideshowSeconds;
     private bool showThumbnailStrip = PeeprSettings.ShowThumbnailStrip;
     private bool confirmBeforeDelete = PeeprSettings.ConfirmBeforeDelete;
-    private FileAssociations.Status associationStatus = FileAssociations.GetStatus();
+    private FileAssociations.Status associationStatus = FileAssociations.GetStatus(FileAssociations.CurrentExePath);
     private string? associationError;
 
     public SettingsView(Action onChanged)
@@ -123,7 +123,7 @@ internal sealed class SettingsView : Component
         {
             if (register)
             {
-                FileAssociations.Register();
+                FileAssociations.Register(FileAssociations.CurrentExePath);
             }
             else
             {
@@ -135,7 +135,7 @@ internal sealed class SettingsView : Component
         {
             associationError = "Windows didn't allow the change: " + ex.Message;
         }
-        associationStatus = FileAssociations.GetStatus();
+        associationStatus = FileAssociations.GetStatus(FileAssociations.CurrentExePath);
         Invalidate();
     }
 

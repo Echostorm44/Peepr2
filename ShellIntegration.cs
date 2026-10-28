@@ -29,33 +29,35 @@ internal static partial class FileAssociations
         RegisteredElsewhere,
     }
 
-    private static string ExePath => Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "Peepr.exe");
+    /// <summary>The running Peepr.exe: what Settings registers.</summary>
+    public static string CurrentExePath => Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "Peepr.exe");
 
-    private static string OpenCommand => $"\"{ExePath}\" \"%1\"";
+    private static string OpenCommand(string exePath) => $"\"{exePath}\" \"%1\"";
 
-    public static Status GetStatus()
+    public static Status GetStatus(string exePath)
     {
         using RegistryKey? command = Registry.CurrentUser.OpenSubKey($@"{ClassesPath}\{ImageProgId}\shell\open\command");
         if (command?.GetValue(null) is not string registered)
         {
             return Status.NotRegistered;
         }
-        return string.Equals(registered, OpenCommand, StringComparison.OrdinalIgnoreCase)
+        return string.Equals(registered, OpenCommand(exePath), StringComparison.OrdinalIgnoreCase)
             ? Status.Registered
             : Status.RegisteredElsewhere;
     }
 
-    public static void Register()
+    /// <summary>Registers <paramref name="exePath"/> (the running app from Settings, the installed one from setup).</summary>
+    public static void Register(string exePath)
     {
-        string icon = $"\"{ExePath}\",0";
-        WriteProgId(ImageProgId, "Photo (Peepr)", icon);
-        WriteProgId(VideoProgId, "Video (Peepr)", icon);
+        string icon = $"\"{exePath}\",0";
+        WriteProgId(ImageProgId, "Photo (Peepr)", icon, exePath);
+        WriteProgId(VideoProgId, "Video (Peepr)", icon, exePath);
 
         using (RegistryKey application = Registry.CurrentUser.CreateSubKey(ApplicationsPath))
         {
             application.SetValue("FriendlyAppName", AppName);
             using RegistryKey command = application.CreateSubKey(@"shell\open\command");
-            command.SetValue(null, OpenCommand);
+            command.SetValue(null, OpenCommand(exePath));
             using RegistryKey supported = application.CreateSubKey("SupportedTypes");
             foreach (string extension in AllExtensions())
             {
@@ -145,6 +147,29 @@ internal static partial class FileAssociations
         NotifyShell();
     }
 
+    /// <summary>The HKCU keys <see cref="Register"/> creates and owns outright.</summary>
+    public static IEnumerable<string> OwnedKeys() =>
+    [
+        $@"{ClassesPath}\{ImageProgId}",
+        $@"{ClassesPath}\{VideoProgId}",
+        ApplicationsPath,
+        @"Software\Peepr",
+    ];
+
+    /// <summary>The single values <see cref="Register"/> writes into keys other apps share: (key, value name).</summary>
+    public static IEnumerable<(string Key, string Name)> SharedValues()
+    {
+        foreach (string extension in MediaTypes.ImageExtensions)
+        {
+            yield return ($@"{ClassesPath}\{extension}\OpenWithProgids", ImageProgId);
+        }
+        foreach (string extension in MediaTypes.VideoExtensions)
+        {
+            yield return ($@"{ClassesPath}\{extension}\OpenWithProgids", VideoProgId);
+        }
+        yield return (RegisteredApplicationsPath, AppName);
+    }
+
     /// <summary>Opens Peepr's page in Settings → Default apps, where the user can make it the default for everything at once.</summary>
     public static void OpenDefaultAppsSettings() =>
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo($"ms-settings:defaultapps?registeredAppUser={AppName}")
@@ -154,7 +179,7 @@ internal static partial class FileAssociations
 
     private static IEnumerable<string> AllExtensions() => MediaTypes.ImageExtensions.Concat(MediaTypes.VideoExtensions);
 
-    private static void WriteProgId(string progId, string typeName, string icon)
+    private static void WriteProgId(string progId, string typeName, string icon, string exePath)
     {
         using RegistryKey key = Registry.CurrentUser.CreateSubKey($@"{ClassesPath}\{progId}");
         key.SetValue(null, typeName);
@@ -165,7 +190,7 @@ internal static partial class FileAssociations
         using RegistryKey open = key.CreateSubKey(@"shell\open");
         open.SetValue("FriendlyAppName", AppName);
         using RegistryKey command = open.CreateSubKey("command");
-        command.SetValue(null, OpenCommand);
+        command.SetValue(null, OpenCommand(exePath));
     }
 
     private static void AddToOpenWith(string extension, string progId)

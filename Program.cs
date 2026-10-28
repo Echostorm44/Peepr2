@@ -1,5 +1,35 @@
 using Cascade.UI;
+using Cascade.UI.Installer.Update;
 using Peepr;
+
+// Updates come from GitHub Releases. Nothing is downloaded or applied without asking: MainView checks in the
+// background and offers a newer version in a banner. Crash rollback after an update belongs to the update shim;
+// the app's only part is Updater.MarkHealthy() once it is up. Best effort: a failure here never stops Peepr.
+try
+{
+    string installDir = AppContext.BaseDirectory;
+    string appVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version is { } v
+        ? $"{v.Major}.{v.Minor}.{v.Build}"
+        : "2.0.0";
+
+    Updater.Configure(
+        new UpdateConfig
+        {
+            ManifestUrl = "https://github.com/Echostorm44/Peepr2/releases/latest/download/manifest.json",
+            CheckOnStartup = true,
+            CheckInterval = TimeSpan.FromHours(6),
+            AutoDownload = false,
+            Channel = "stable",
+        },
+        appVersion,
+        "win-x64",
+        installDir,
+        Environment.ProcessPath ?? System.IO.Path.Combine(installDir, "Peepr.exe"));
+}
+catch
+{
+    // The app runs regardless.
+}
 
 // Files passed on the command line (Explorer "Open with", a file association). App.Args isn't populated until
 // App.Run starts, so read the raw command line; anything that isn't a flag is a path.

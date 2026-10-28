@@ -1,4 +1,5 @@
 using Cascade.UI;
+using Updater = Cascade.UI.Installer.Update.Updater;
 using KeyCode = Cascade.UI.Key;
 using Path = System.IO.Path;
 
@@ -53,6 +54,9 @@ internal sealed class MainView : Component
     private bool noticeOffersUndo;
     private int noticeGeneration;
 
+    private string? availableUpdate;
+    private string? updateStatus;
+
     protected override Task OnMounted()
     {
         FileIntake.FilesReceived += OpenPaths;
@@ -62,8 +66,78 @@ internal sealed class MainView : Component
         {
             OpenPaths(launchFiles);
         }
+
+        if (Updater.IsConfigured)
+        {
+            // This launch reached a healthy state: defuse the update shim's crash rollback for this version.
+            Updater.MarkHealthy();
+            _ = CheckForUpdateAsync();
+        }
         return Task.CompletedTask;
     }
+
+    // ── Updates ───────────────────────────────────────────────────────
+
+    private async Task CheckForUpdateAsync()
+    {
+        try
+        {
+            var result = await Task.Run(() => Updater.CheckNowAsync());
+            if (result.IsAvailable && result.Version is { Length: > 0 })
+            {
+                availableUpdate = result.Version;
+                Invalidate();
+            }
+        }
+        catch
+        {
+            // A failed check is invisible: no network, no release yet.
+        }
+    }
+
+    private async Task InstallUpdateAsync()
+    {
+        updateStatus = "Downloading the update…";
+        Invalidate();
+        try
+        {
+            await Task.Run(() => Updater.DownloadAsync());
+            updateStatus = "Restarting Peepr…";
+            Invalidate();
+            StopVideo();
+            // Hands over to the update shim, which waits for Peepr to exit, swaps the files and relaunches.
+            Updater.ApplyAndRestart();
+        }
+        catch
+        {
+            updateStatus = null;
+            ShowNotice("The update didn't download. Peepr will offer it again later.", offerUndo: false);
+            availableUpdate = null;
+            Invalidate();
+        }
+    }
+
+    private Node UpdateBanner() =>
+        new Column(
+            crossAxisAlignment: CrossAxisAlignment.End,
+            children:
+            [
+                new Row(
+                    spacing: 12,
+                    crossAxisAlignment: CrossAxisAlignment.Center,
+                    children: updateStatus is not null
+                        ? [new Label(updateStatus).FontSize(13).Color(TextPrimary)]
+                        :
+                        [
+                            new Label($"Peepr {availableUpdate} is available").FontSize(13).Color(TextPrimary),
+                            new Button("Later", () => { availableUpdate = null; Invalidate(); }).Variant("ghost").Height(28),
+                            new Button("Update", () => _ = InstallUpdateAsync()).Height(28),
+                        ])
+                    .Padding(EdgeInsets.Symmetric(horizontal: 14, vertical: 8))
+                    .Background(ToolbarBackground)
+                    .CornerRadius(12)
+                    .Border(ToolbarHairline, 1, 12),
+            ]).Padding(EdgeInsets.Only(top: 18, right: 18));
 
     protected override void OnUnmounted()
     {
@@ -674,6 +748,10 @@ internal sealed class MainView : Component
         if (notice is not null)
         {
             layers.Add(NoticeLayer().PassThroughHits());
+        }
+        if (availableUpdate is not null)
+        {
+            layers.Add(UpdateBanner().PassThroughHits());
         }
 
         return new KeyHandler(

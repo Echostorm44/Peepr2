@@ -31,13 +31,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.46-local.5" />
+    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.46-local.6" />
     <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.2-local.2" />
     <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.2-local.2" />
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Assets\PeeprBackDrop.png" LogicalName="PeeprBackDrop.png" />
+    <InternalsVisibleTo Include="Peepr.Tests" />
   </ItemGroup>
 
   <ItemGroup>

@@ -47,3 +47,8 @@ AGENTS.md
 Status.md
 opencode.json
 .claude/
+
+# Installer packaging output
+dist/
+dist-build/
+app-publish/
