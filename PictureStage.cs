@@ -20,12 +20,11 @@ internal sealed class PictureStage
     // How often (in video time) the video controls are re-rendered to move the seek bar along.
     private const long ProgressStepTicks = TimeSpan.TicksPerSecond / 4;
 
-    private ImageSource[] frames = [];
+    // The photo, or the animation frame on show (the player writes each frame into it in place).
+    private ImageSource? picture;
+    private AnimationPlayer? animation;
     // Halved copies of a large still, largest first (see DecodedPicture.SmallerLevels).
     private ImageSource[] smallerLevels = [];
-    private int[] frameDurationsMs = [];
-    private int frameIndex;
-    private float frameElapsedMs;
     private int pictureWidth;
     private int pictureHeight;
 
@@ -46,7 +45,7 @@ internal sealed class PictureStage
     private Point pointer;
 
     /// <summary>True when something is on stage to draw: a photo, or a video that has shown its first frame.</summary>
-    public bool HasPicture => frames.Length > 0 || video?.Picture is not null;
+    public bool HasPicture => picture is not null || video?.Picture is not null;
 
     public bool IsZoomed => zoom is not null;
 
@@ -57,29 +56,27 @@ internal sealed class PictureStage
 
     private int ContentHeight => video?.VideoHeight ?? pictureHeight;
 
-    /// <summary>Replaces what's on stage with a photo, uploading every frame of <paramref name="picture"/>.</summary>
-    public void Show(DecodedPicture picture)
+    /// <summary>Replaces what's on stage with a photo, or an animation that starts playing.</summary>
+    public void Show(DecodedPicture decoded)
     {
-        var uploaded = new ImageSource[picture.Frames.Length];
-        for (int i = 0; i < uploaded.Length; i++)
-        {
-            // Shares the decoded buffer with the renderer rather than copying it.
-            uploaded[i] = ImageSource.FromPixels(picture.Frames[i], picture.Width, picture.Height);
-        }
+        // A still shares the decoded buffer with the renderer rather than copying it. An animation's frames are
+        // written into its image, so it gets a copy: the cached first frame must stay the first frame.
+        byte[] pixels = decoded.IsAnimated ? (byte[])decoded.Pixels.Clone() : decoded.Pixels;
+        ImageSource uploaded = ImageSource.FromPixels(pixels, decoded.Width, decoded.Height);
 
-        var levels = new ImageSource[picture.SmallerLevels.Length];
+        var levels = new ImageSource[decoded.SmallerLevels.Length];
         for (int i = 0; i < levels.Length; i++)
         {
-            PictureLevel level = picture.SmallerLevels[i];
+            PictureLevel level = decoded.SmallerLevels[i];
             levels[i] = ImageSource.FromPixels(level.Pixels, level.Width, level.Height);
         }
 
         Release();
-        frames = uploaded;
+        picture = uploaded;
+        animation = decoded.Animation is { } source ? new AnimationPlayer(source, uploaded) : null;
         smallerLevels = levels;
-        frameDurationsMs = picture.FrameDurationsMs;
-        pictureWidth = picture.Width;
-        pictureHeight = picture.Height;
+        pictureWidth = decoded.Width;
+        pictureHeight = decoded.Height;
         quarterTurns = 0;
         ResetZoom();
         ApplyCarriedView();
@@ -139,7 +136,7 @@ internal sealed class PictureStage
         // Only ask for frames while something moves: a still photo, a paused or finished video draw once.
         Action<float>? onFrame = video is { NeedsFrames: true }
             ? _ => PumpVideo(onVideoProgress)
-            : frames.Length > 1 ? AdvanceAnimation : null;
+            : animation is not null ? AdvanceAnimation : null;
 
         return CanvasFactory.Canvas(Size.Fill, Draw, onFrame)
             .OnScroll(delta =>
@@ -197,26 +194,13 @@ internal sealed class PictureStage
         }
     }
 
-    private void AdvanceAnimation(float deltaSeconds)
-    {
-        if (frames.Length < 2)
-        {
-            return;
-        }
-
-        frameElapsedMs += deltaSeconds * 1000f;
-        while (frameElapsedMs >= frameDurationsMs[frameIndex])
-        {
-            frameElapsedMs -= frameDurationsMs[frameIndex];
-            frameIndex = (frameIndex + 1) % frames.Length;
-        }
-    }
+    private void AdvanceAnimation(float deltaSeconds) => animation?.Advance(deltaSeconds * 1000f);
 
     private void Draw(DrawContext context, Size size)
     {
         viewport = size;
         pixelRatio = context.PixelRatio > 0 ? context.PixelRatio : 1f;
-        ImageSource? texture = video is not null ? video.Picture : frames.Length > 0 ? frames[frameIndex] : null;
+        ImageSource? texture = video is not null ? video.Picture : picture;
         if (texture is null || ContentWidth == 0 || ContentHeight == 0)
         {
             return;
@@ -344,19 +328,16 @@ internal sealed class PictureStage
     private void Release()
     {
         CarryView();
-        foreach (ImageSource frame in frames)
-        {
-            frame.Dispose();
-        }
+        // The player first, so it never writes into a disposed image.
+        animation?.Dispose();
+        animation = null;
+        picture?.Dispose();
+        picture = null;
         foreach (ImageSource level in smallerLevels)
         {
             level.Dispose();
         }
-        frames = [];
         smallerLevels = [];
-        frameDurationsMs = [];
-        frameIndex = 0;
-        frameElapsedMs = 0;
         pictureWidth = 0;
         pictureHeight = 0;
         video = null;

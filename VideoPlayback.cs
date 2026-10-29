@@ -58,6 +58,9 @@ internal sealed class VideoPlayback : IDisposable
     /// </summary>
     public bool NeedsFrames => IsRunning || (awaitingScrubPicture && !disposed);
 
+    /// <summary>Start again from the beginning on reaching the end, instead of stopping there.</summary>
+    public bool Repeat { get; set; }
+
     public float Volume
     {
         get => player.Volume;
@@ -77,6 +80,10 @@ internal sealed class VideoPlayback : IDisposable
 
         bool hadPicture = picture is not null;
         player.Tick();
+        if (Repeat && player.Ended && player.Fault is null)
+        {
+            player.TogglePause(); // a finished player plays again from the start
+        }
         if (player.TryTakePicture(takePicture))
         {
             awaitingScrubPicture = false;

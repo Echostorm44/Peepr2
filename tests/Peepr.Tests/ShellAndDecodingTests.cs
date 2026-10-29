@@ -120,7 +120,51 @@ internal sealed class PictureDecoderTests
             await Assert.That(picture.Width).IsEqualTo(3);
             await Assert.That(picture.Height).IsEqualTo(2);
             await Assert.That(picture.IsAnimated).IsFalse();
-            await Assert.That((int)picture.Frames[0][0]).IsEqualTo(200);
+            await Assert.That((int)picture.Pixels[0]).IsEqualTo(200);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task Decode_AnimatedGif_KeepsTheFirstFrame_AndPlaysTheRestInOrderThenLoops()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "peepr-test-" + Guid.NewGuid().ToString("N") + ".gif");
+        try
+        {
+            using (var sequence = new ImageSequence { CanvasWidth = 2, CanvasHeight = 2 })
+            {
+                foreach (ushort red in new ushort[] { 0, 100 * 257, 200 * 257 })
+                {
+                    var frame = new ImageFrame();
+                    frame.Initialize(2, 2, SharpImage.Core.ColorspaceType.SRGB, hasAlpha: false);
+                    frame.Delay = 5;
+                    for (int y = 0; y < 2; y++)
+                    {
+                        Span<ushort> row = frame.GetPixelRowForWrite(y);
+                        row[0] = red;
+                        row[3] = red;
+                    }
+                    sequence.AddFrame(frame);
+                }
+                SharpImage.Formats.GifCoder.WriteSequence(sequence, path);
+            }
+
+            DecodedPicture picture = PictureDecoder.Decode(path);
+            await Assert.That(picture.IsAnimated).IsTrue();
+            await Assert.That((int)picture.Pixels[0]).IsEqualTo(0);
+
+            AnimationFrames frames = picture.Animation!.Open();
+            var output = new byte[2 * 2 * 4];
+            var reds = new List<int>();
+            for (int i = 0; i < 4; i++)
+            {
+                await Assert.That(frames.ReadNext(output)).IsEqualTo(50);
+                reds.Add(output[0]);
+            }
+            await Assert.That(reds).IsEquivalentTo([0, 100, 200, 0], TUnit.Assertions.Enums.CollectionOrdering.Matching);
         }
         finally
         {

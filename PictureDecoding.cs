@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Threading.Channels;
+using ImageSource = Cascade.UI.ImageSource;
 using SharpImage.Formats;
 using SharpImage.Image;
 using SharpImage.Transform;
@@ -8,14 +11,18 @@ namespace Peepr;
 
 /// <summary>
 /// A picture decoded to RGBA8 (sRGB, straight alpha, tightly packed), ready to become a texture. An animated
-/// GIF / WebP / AVIF carries one fully composited buffer per frame.
+/// GIF / WebP / AVIF carries its first frame here and the rest in <see cref="Animation"/>, composited as it plays.
 /// </summary>
 internal sealed class DecodedPicture
 {
     public required int Width { get; init; }
     public required int Height { get; init; }
-    public required byte[][] Frames { get; init; }
-    public required int[] FrameDurationsMs { get; init; }
+
+    /// <summary>The still, or an animation's first frame.</summary>
+    public required byte[] Pixels { get; init; }
+
+    /// <summary>Null for a still. Frames are composited as they play, so memory holds a few of them, not all.</summary>
+    public AnimationSource? Animation { get; init; }
 
     /// <summary>
     /// Successively halved copies of a large still (largest first, not including the full size), for drawing it
@@ -23,7 +30,7 @@ internal sealed class DecodedPicture
     /// </summary>
     public PictureLevel[] SmallerLevels { get; init; } = [];
 
-    public bool IsAnimated => Frames.Length > 1;
+    public bool IsAnimated => Animation is not null;
 }
 
 /// <summary>One RGBA8 copy of a picture at a reduced size.</summary>
@@ -50,7 +57,7 @@ internal static class PictureDecoder
         }
 
         if (format is ImageFileFormat.Gif or ImageFileFormat.WebP or ImageFileFormat.Avif
-            && TryDecodeAnimation(path, out DecodedPicture? animation))
+            && TryDecodeAnimation(path, data, format, out DecodedPicture? animation))
         {
             return animation;
         }
@@ -66,8 +73,7 @@ internal static class PictureDecoder
         {
             Width = width,
             Height = height,
-            Frames = [pixels],
-            FrameDurationsMs = [0],
+            Pixels = pixels,
             SmallerLevels = BuildSmallerLevels(pixels, width, height),
         };
     }
@@ -129,13 +135,18 @@ internal static class PictureDecoder
     public static bool NeedsOrienting(ImageFrame frame) =>
         frame.Orientation is not (SharpImage.Core.OrientationType.Undefined or SharpImage.Core.OrientationType.TopLeft);
 
-    private static bool TryDecodeAnimation(string path, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out DecodedPicture? animation)
+    // An animation keeps its file's bytes (GIF, read a frame at a time) or SharpImage's decoded sequence (WebP and
+    // AVIF, which it only decodes whole), plus the first frame to show at once. A single frame is a still.
+    private static bool TryDecodeAnimation(string path, byte[] data, ImageFileFormat format,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out DecodedPicture? animation)
     {
         animation = null;
-        ImageSequence sequence;
+        AnimationSource source;
         try
         {
-            sequence = FormatRegistry.ReadSequence(path);
+            source = format == ImageFileFormat.Gif
+                ? AnimationSource.FromGif(data)
+                : AnimationSource.FromSequence(FormatRegistry.ReadSequence(path));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -143,44 +154,18 @@ internal static class PictureDecoder
             return false;
         }
 
-        using (sequence)
+        if (!source.IsAnimated)
         {
-            if (sequence.Count < 2)
-            {
-                return false;
-            }
-
-            int width = sequence.CanvasWidth > 0 ? sequence.CanvasWidth : (int)sequence.Frames[0].Columns;
-            int height = sequence.CanvasHeight > 0 ? sequence.CanvasHeight : (int)sequence.Frames[0].Rows;
-            var frames = new byte[sequence.Count][];
-            var durations = new int[sequence.Count];
-            var canvas = new byte[width * height * 4];
-
-            for (int i = 0; i < sequence.Count; i++)
-            {
-                ImageFrame frame = sequence.Frames[i];
-                byte[]? beforeFrame = frame.DisposeMethod == SharpImage.Core.DisposeType.Previous ? (byte[])canvas.Clone() : null;
-
-                BlendOnto(frame, canvas, width, height);
-                frames[i] = (byte[])canvas.Clone();
-                durations[i] = FrameDuration(frame, sequence.Timescale);
-
-                if (frame.DisposeMethod == SharpImage.Core.DisposeType.Background)
-                {
-                    ClearRect(canvas, width, height, frame.Page.X, frame.Page.Y, (int)frame.Columns, (int)frame.Rows);
-                }
-                else if (beforeFrame is not null)
-                {
-                    canvas = beforeFrame;
-                }
-            }
-
-            animation = new DecodedPicture { Width = width, Height = height, Frames = frames, FrameDurationsMs = durations };
-            return true;
+            return false;
         }
+
+        var first = new byte[source.Width * source.Height * 4];
+        source.Open().ReadNext(first);
+        animation = new DecodedPicture { Width = source.Width, Height = source.Height, Pixels = first, Animation = source };
+        return true;
     }
 
-    private static int FrameDuration(ImageFrame frame, long timescale)
+    internal static int FrameDuration(ImageFrame frame, long timescale)
     {
         int milliseconds = timescale > 0 && frame.DurationTicks > 0
             ? (int)(frame.DurationTicks * 1000 / timescale)
@@ -255,7 +240,7 @@ internal static class PictureDecoder
     }
 
     // Draws one animation frame over the canvas at its page offset (alpha "over"), clipped to the canvas.
-    private static void BlendOnto(ImageFrame frame, byte[] canvas, int canvasWidth, int canvasHeight)
+    internal static void BlendOnto(ImageFrame frame, byte[] canvas, int canvasWidth, int canvasHeight)
     {
         int frameWidth = (int)frame.Columns;
         int frameHeight = (int)frame.Rows;
@@ -307,7 +292,7 @@ internal static class PictureDecoder
         }
     }
 
-    private static void ClearRect(byte[] canvas, int canvasWidth, int canvasHeight, int left, int top, int width, int height)
+    internal static void ClearRect(byte[] canvas, int canvasWidth, int canvasHeight, int left, int top, int width, int height)
     {
         int startX = Math.Clamp(left, 0, canvasWidth);
         int endX = Math.Clamp(left + width, 0, canvasWidth);
@@ -318,6 +303,202 @@ internal static class PictureDecoder
             canvas.AsSpan(((y * canvasWidth) + startX) * 4, (endX - startX) * 4).Clear();
         }
     }
+}
+
+/// <summary>
+/// The frames of an animation, decoded on demand: a GIF's file bytes (SharpImage reads them a frame at a time), or
+/// a WebP / AVIF sequence SharpImage has decoded whole. Immutable, so the cache and a player can share it; each
+/// <see cref="Open"/> starts an independent pass.
+/// </summary>
+internal sealed class AnimationSource
+{
+    private readonly byte[]? gif;
+    private readonly ImageSequence? sequence;
+
+    private AnimationSource(byte[]? gif, ImageSequence? sequence, int width, int height, bool isAnimated)
+    {
+        this.gif = gif;
+        this.sequence = sequence;
+        Width = width;
+        Height = height;
+        IsAnimated = isAnimated;
+    }
+
+    public int Width { get; }
+
+    public int Height { get; }
+
+    /// <summary>False when there is only one frame: the file is a still that happens to use an animation format.</summary>
+    public bool IsAnimated { get; }
+
+    public static AnimationSource FromGif(byte[] data)
+    {
+        var reader = new GifFrameReader(new MemoryStream(data, writable: false));
+        // Only the frame headers and data are walked here, not composited: a second frame makes it an animation.
+        bool animated = false;
+        using (ImageFrame? first = reader.ReadNextFrame())
+        {
+            if (first is null)
+            {
+                throw new InvalidDataException("GIF contains no image data.");
+            }
+            using ImageFrame? second = reader.ReadNextFrame();
+            animated = second is not null;
+        }
+        return new AnimationSource(data, null, reader.CanvasWidth, reader.CanvasHeight, animated);
+    }
+
+    public static AnimationSource FromSequence(ImageSequence sequence)
+    {
+        int width = sequence.CanvasWidth > 0 ? sequence.CanvasWidth : (int)sequence.Frames[0].Columns;
+        int height = sequence.CanvasHeight > 0 ? sequence.CanvasHeight : (int)sequence.Frames[0].Rows;
+        return new AnimationSource(null, sequence, width, height, sequence.Count > 1);
+    }
+
+    public AnimationFrames Open() =>
+        gif is not null
+            ? new AnimationFrames(Width, Height, new GifFrameReader(new MemoryStream(gif, writable: false)), null)
+            : new AnimationFrames(Width, Height, null, sequence);
+}
+
+/// <summary>
+/// One pass over an animation: composites each frame onto the canvas in turn (honouring GIF disposal) and starts
+/// again after the last. Holds one canvas, not the frames. Not thread-safe.
+/// </summary>
+internal sealed class AnimationFrames
+{
+    private readonly int width;
+    private readonly int height;
+    private readonly GifFrameReader? reader;
+    private readonly ImageSequence? sequence;
+    private byte[] canvas;
+    private int sequenceIndex;
+
+    public AnimationFrames(int width, int height, GifFrameReader? reader, ImageSequence? sequence)
+    {
+        this.width = width;
+        this.height = height;
+        this.reader = reader;
+        this.sequence = sequence;
+        canvas = new byte[width * height * 4];
+    }
+
+    /// <summary>Composites the next frame into <paramref name="output"/> (width × height × 4) and returns its duration.</summary>
+    public int ReadNext(byte[] output)
+    {
+        ImageFrame frame = NextFrame();
+        try
+        {
+            byte[]? beforeFrame = frame.DisposeMethod == SharpImage.Core.DisposeType.Previous ? (byte[])canvas.Clone() : null;
+            PictureDecoder.BlendOnto(frame, canvas, width, height);
+            canvas.CopyTo(output, 0);
+            int duration = PictureDecoder.FrameDuration(frame, sequence?.Timescale ?? 0);
+
+            if (frame.DisposeMethod == SharpImage.Core.DisposeType.Background)
+            {
+                PictureDecoder.ClearRect(canvas, width, height, frame.Page.X, frame.Page.Y, (int)frame.Columns, (int)frame.Rows);
+            }
+            else if (beforeFrame is not null)
+            {
+                canvas = beforeFrame;
+            }
+            return duration;
+        }
+        finally
+        {
+            // A GIF frame was decoded for this pass alone; a sequence's frames belong to the sequence.
+            if (reader is not null)
+            {
+                frame.Dispose();
+            }
+        }
+    }
+
+    private ImageFrame NextFrame()
+    {
+        if (reader is not null)
+        {
+            if (reader.ReadNextFrame() is { } frame)
+            {
+                return frame;
+            }
+            reader.Rewind();
+            Array.Clear(canvas);
+            return reader.ReadNextFrame() ?? throw new InvalidDataException("GIF contains no image data.");
+        }
+
+        if (sequenceIndex == sequence!.Count)
+        {
+            sequenceIndex = 0;
+            Array.Clear(canvas);
+        }
+        return sequence.Frames[sequenceIndex++];
+    }
+}
+
+/// <summary>
+/// Plays an <see cref="AnimationSource"/> into one <see cref="ImageSource"/>. A worker thread composites frames a
+/// couple ahead into a few reused buffers; the UI thread calls <see cref="Advance"/> each display frame and writes
+/// the frame that has fallen due into the texture in place, as video does. Memory is a few frames, whatever the
+/// animation's length, and the first frame needs no wait.
+/// </summary>
+internal sealed class AnimationPlayer : IDisposable
+{
+    private const int FramesAhead = 2;
+
+    private readonly ImageSource target;
+    private readonly Channel<(byte[] Pixels, int DurationMs)> ready =
+        Channel.CreateBounded<(byte[], int)>(new BoundedChannelOptions(FramesAhead) { SingleReader = true, SingleWriter = true });
+    private readonly ConcurrentBag<byte[]> spare = [];
+    private float elapsedMs;
+    // The frame on screen until the first composited one arrives is the decoded first frame: show the next at once.
+    private int shownDurationMs;
+
+    public AnimationPlayer(AnimationSource source, ImageSource target)
+    {
+        this.target = target;
+        _ = Task.Run(() => CompositeAheadAsync(source));
+    }
+
+    /// <summary>UI thread, once per display frame: shows the next frame when the current one's time is up.</summary>
+    public void Advance(float deltaMs)
+    {
+        elapsedMs += deltaMs;
+        while (elapsedMs >= shownDurationMs && ready.Reader.TryRead(out (byte[] Pixels, int DurationMs) next))
+        {
+            elapsedMs -= shownDurationMs;
+            target.Update(next.Pixels, target.Width, target.Height);
+            spare.Add(next.Pixels);
+            shownDurationMs = next.DurationMs;
+        }
+        // Compositing fell behind (a huge frame): hold this one rather than racing through the backlog after.
+        elapsedMs = MathF.Min(elapsedMs, shownDurationMs);
+    }
+
+    // Runs until Dispose closes the channel, which also releases a write waiting for room.
+    private async Task CompositeAheadAsync(AnimationSource source)
+    {
+        try
+        {
+            AnimationFrames frames = source.Open();
+            int length = source.Width * source.Height * 4;
+            while (true)
+            {
+                byte[] buffer = spare.TryTake(out byte[]? reused) ? reused : new byte[length];
+                int duration = frames.ReadNext(buffer);
+                await ready.Writer.WriteAsync((buffer, duration)).ConfigureAwait(false);
+            }
+        }
+        catch (ChannelClosedException)
+        {
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // A damaged frame part-way through: the animation stops on the last good frame.
+        }
+    }
+
+    public void Dispose() => ready.Writer.TryComplete();
 }
 
 /// <summary>

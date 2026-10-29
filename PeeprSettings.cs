@@ -51,6 +51,13 @@ internal static class PeeprSettings
         set => LocalStorage.Set("volume", Math.Clamp(value, 0f, 1f), Json.Single);
     }
 
+    /// <summary>A video starts again when it ends (not during a slideshow, which moves on instead).</summary>
+    public static bool RepeatVideo
+    {
+        get => LocalStorage.Get("repeatVideo", true, Json.Boolean);
+        set => LocalStorage.Set("repeatVideo", value, Json.Boolean);
+    }
+
     public static bool Muted
     {
         get => LocalStorage.Get("muted", false, Json.Boolean);

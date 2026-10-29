@@ -37,6 +37,12 @@ internal static class LucideIcons
         "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
         "M3 3v5h5");
 
+    public static readonly Icon Repeat = Create("Repeat",
+        "m17 2 4 4-4 4",
+        "M3 11v-1a4 4 0 0 1 4-4h14",
+        "m7 22-4-4 4-4",
+        "M21 13v1a4 4 0 0 1-4 4H3");
+
     public static readonly Icon Copy = Create("Copy",
         "M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z",
         "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2");

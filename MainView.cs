@@ -278,6 +278,7 @@ internal sealed class MainView : Component
         }
 
         video = playback;
+        ApplyRepeat();
         stage.ShowVideo(playback);
         // The spinner stays until the first frame arrives (OnVideoProgress); a file with only sound has none.
         loading = playback.HasVideo;
@@ -336,6 +337,27 @@ internal sealed class MainView : Component
         }
         video.SeekTo(video.Position + offset);
         Invalidate();
+    }
+
+    // Turning repeat on for a video that has already finished starts it again.
+    private void ToggleRepeat()
+    {
+        PeeprSettings.RepeatVideo = !PeeprSettings.RepeatVideo;
+        ApplyRepeat();
+        if (video is { Repeat: true, Ended: true })
+        {
+            video.TogglePause();
+        }
+        Invalidate();
+    }
+
+    // A slideshow waits for a video to end before moving on, so it plays each one once whatever the setting.
+    private void ApplyRepeat()
+    {
+        if (video is not null)
+        {
+            video.Repeat = PeeprSettings.RepeatVideo && !slideshowRunning;
+        }
     }
 
     private void ToggleMute()
@@ -583,7 +605,7 @@ internal sealed class MainView : Component
             try
             {
                 DecodedPicture picture = await pictureCache.Get(file);
-                image = new ImageData { Pixels = picture.Frames[0], Width = picture.Width, Height = picture.Height, Stride = picture.Width * 4 };
+                image = new ImageData { Pixels = picture.Pixels, Width = picture.Width, Height = picture.Height, Stride = picture.Width * 4 };
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -629,6 +651,7 @@ internal sealed class MainView : Component
         }
 
         slideshowRunning = true;
+        ApplyRepeat();
         _ = RunSlideshowAsync(++slideshowGeneration);
         Invalidate();
     }
@@ -637,6 +660,7 @@ internal sealed class MainView : Component
     {
         slideshowRunning = false;
         slideshowGeneration++;
+        ApplyRepeat();
         Invalidate();
     }
 
@@ -813,6 +837,7 @@ internal sealed class MainView : Component
         Bind(KeyCode.Left, () => SeekBy(TimeSpan.FromSeconds(-5)), ModifierKeys.Shift),
         Bind(KeyCode.Right, () => SeekBy(TimeSpan.FromSeconds(5)), ModifierKeys.Shift),
         Bind(KeyCode.M, ToggleMute, allowRepeat: false),
+        Bind(KeyCode.L, ToggleRepeat, allowRepeat: false),
         Bind(KeyCode.Home, () => NavigateTo(0)),
         Bind(KeyCode.End, () => NavigateTo(int.MaxValue)),
         Bind(KeyCode.Delete, () => _ = DeleteCurrentAsync(), allowRepeat: false),
@@ -992,6 +1017,7 @@ internal sealed class MainView : Component
         double durationSeconds = Math.Max(playback.Duration.TotalSeconds, 0.001);
         float position = (float)Math.Clamp(playback.Position.TotalSeconds, 0, durationSeconds);
         bool muted = PeeprSettings.Muted;
+        bool repeat = PeeprSettings.RepeatVideo;
         Icon playIcon = playback.Ended ? LucideIcons.Replay : playback.IsPaused ? LucideIcons.Play : LucideIcons.Pause;
 
         return new Row(
@@ -1007,12 +1033,13 @@ internal sealed class MainView : Component
                     .AccessibleLabel("Position")
                     .Expand(),
                 new Label("-" + FormatTime(playback.Duration - playback.Position)).FontSize(12).Color(TextSecondary).Width(56),
+                ToolButton(LucideIcons.Repeat, ToggleRepeat, repeat ? "Repeat is on (L)" : "Repeat is off (L)", false, highlighted: repeat),
                 ToolButton(muted ? LucideIcons.VolumeMuted : LucideIcons.Volume, ToggleMute, muted ? "Unmute (M)" : "Mute (M)", false),
                 new Slider(Bind(muted ? 0f : PeeprSettings.Volume, SetVolume), 0f, 1f)
                     .AccessibleLabel("Volume")
                     .Width(90),
             ])
-            .Width(620)
+            .Width(666)
             .Padding(EdgeInsets.Symmetric(horizontal: 10, vertical: 6))
             .Background(ToolbarBackground)
             .CornerRadius(14)
