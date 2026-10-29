@@ -32,7 +32,7 @@
 
   <ItemGroup>
     <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.47" />
-    <PackageReference Include="Echostorm.SharpImage" Version="1.0.18" />
+    <PackageReference Include="Echostorm.SharpImage" Version="1.0.19" />
     <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.2" />
     <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.2" />
   </ItemGroup>

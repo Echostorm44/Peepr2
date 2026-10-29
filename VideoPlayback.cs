@@ -53,10 +53,11 @@ internal sealed class VideoPlayback : IDisposable
     public bool IsRunning => !disposed && !player.IsPaused && !player.Ended && player.Fault is null;
 
     /// <summary>
-    /// True while the display should keep asking for pictures: while playing, and after a seek while paused
-    /// until the picture at the new position has arrived.
+    /// True while the display should keep asking for pictures: while playing, after a seek while paused until the
+    /// picture at the new position has arrived, and when a repeating video has just ended. The player's own thread
+    /// marks the end at any moment, so <see cref="PumpFrame"/> must still run to start it again.
     /// </summary>
-    public bool NeedsFrames => IsRunning || (awaitingScrubPicture && !disposed);
+    public bool NeedsFrames => IsRunning || (!disposed && (awaitingScrubPicture || (Repeat && player.Ended && player.Fault is null)));
 
     /// <summary>Start again from the beginning on reaching the end, instead of stopping there.</summary>
     public bool Repeat { get; set; }

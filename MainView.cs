@@ -176,7 +176,9 @@ internal sealed class MainView : Component
         wallpaper = await Task.Run(() =>
         {
             using Stream? stream = typeof(MainView).Assembly.GetManifestResourceStream("PeeprBackDrop.png");
-            return stream is null ? null : ImageSource.FromStream(stream);
+            ImageSource? decoded = stream is null ? null : ImageSource.FromStream(stream);
+            MemoryRelief.AfterDecode();
+            return decoded;
         });
         Invalidate();
     }

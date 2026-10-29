@@ -513,7 +513,17 @@ internal sealed class PictureCache
     {
         if (!decodes.TryGetValue(path, out Task<DecodedPicture>? decode))
         {
-            decode = Task.Run(() => PictureDecoder.Decode(path));
+            decode = Task.Run(() =>
+            {
+                try
+                {
+                    return PictureDecoder.Decode(path);
+                }
+                finally
+                {
+                    MemoryRelief.AfterDecode();
+                }
+            });
             decodes[path] = decode;
         }
         return decode;
@@ -563,27 +573,27 @@ internal sealed class PictureCache
 }
 
 /// <summary>
-/// Gives memory back promptly after Peepr drops something big. Decoded photos and video frame pools live on the
-/// large object heap, which is only swept by a full collection; on a machine with plenty of RAM the runtime can
-/// leave hundreds of megabytes of them dead for minutes. Peepr knows the moments it lets go of a photo or a
-/// video, so it asks for a background (non-blocking) full collection then, at most once a second.
+/// Gives memory back promptly after Peepr drops something big. Decoded photos, a decode's working buffers and video
+/// frame pools live on the large object heap, which is only swept by a full collection; on a machine with plenty of
+/// RAM the runtime can leave hundreds of megabytes of them dead for minutes. Peepr knows the moments it lets go of
+/// something big, so it asks for a full, compacting collection then: one, a moment after the last of a burst
+/// (opening a file decodes it and both neighbours at once).
 /// </summary>
 internal static class MemoryRelief
 {
-    private const long MinimumIntervalMs = 1000;
-    private static long lastCollectionTicks = -MinimumIntervalMs;
+    private const int SettleMs = 250;
+    // Aggressive, because a background sweep frees the objects but leaves their pages committed to the process.
+    // It blocks for a few milliseconds (25 at most for three 12-megapixel decodes), just after a file has opened.
+    private static readonly Timer Sweep = new(_ => GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true));
 
-    /// <summary>A decoded photo left the cache: sweep in the background, at most once a second.</summary>
-    public static void AfterLargeRelease()
-    {
-        long now = Environment.TickCount64;
-        if (now - lastCollectionTicks < MinimumIntervalMs)
-        {
-            return;
-        }
-        lastCollectionTicks = now;
-        GC.Collect(2, GCCollectionMode.Forced, blocking: false);
-    }
+    /// <summary>A decoded photo left the cache: sweep once things settle.</summary>
+    public static void AfterLargeRelease() => Sweep.Change(SettleMs, Timeout.Infinite);
+
+    /// <summary>
+    /// A decode finished. SharpImage works in 16-bit buffers several times the size of the RGBA8 result, all
+    /// garbage once it returns.
+    /// </summary>
+    public static void AfterDecode() => AfterLargeRelease();
 
     /// <summary>
     /// A video closed, dropping its decoder's frame pool (~100 MB at 1080p). A background sweep frees the
@@ -592,7 +602,6 @@ internal static class MemoryRelief
     /// </summary>
     public static void AfterVideoClosed()
     {
-        lastCollectionTicks = Environment.TickCount64;
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
     }
 }
