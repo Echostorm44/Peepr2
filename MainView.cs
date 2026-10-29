@@ -32,7 +32,7 @@ internal sealed class MainView : Component
 
     private readonly PictureCache pictureCache = new();
     private readonly ThumbnailCache thumbnails = new();
-    private readonly PictureStage stage = new();
+    private readonly PictureStage stage = new() { EnlargeToFit = PeeprSettings.FitToWindow };
     private bool showThumbnails = PeeprSettings.ShowThumbnailStrip;
     // Decoded only when the welcome screen is shown, off the UI thread: opening a photo never pays for it.
     private ImageSource? wallpaper;
@@ -461,6 +461,7 @@ internal sealed class MainView : Component
         ContextMenu.Show(
         [
             ContextMenuItem.Action("Reset zoom", ResetZoom, shortcut: "Z", disabled: !stage.IsZoomed),
+            ContextMenuItem.Toggle("Fit to window", stage.EnlargeToFit, _ => ToggleFitToWindow(), shortcut: "W"),
             ContextMenuItem.Separator(),
             ContextMenuItem.Action("Copy", () => _ = CopyCurrentAsync(), shortcut: "Ctrl+C", disabled: !hasFile),
             ContextMenuItem.Action("Rotate", Rotate, shortcut: "R", disabled: !stage.HasPicture),
@@ -666,9 +667,22 @@ internal sealed class MainView : Component
         Invalidate();
     }
 
+    // Small photos enlarge to fill the window, or go back to their own size. Back to fit either way: that is what
+    // the toggle is about.
+    private void ToggleFitToWindow()
+    {
+        PeeprSettings.FitToWindow = !PeeprSettings.FitToWindow;
+        OnSettingsChanged();
+    }
+
     private void OnSettingsChanged()
     {
         showThumbnails = PeeprSettings.ShowThumbnailStrip;
+        if (stage.EnlargeToFit != PeeprSettings.FitToWindow)
+        {
+            stage.EnlargeToFit = PeeprSettings.FitToWindow;
+            stage.ResetZoom();
+        }
         folder?.Resort(PeeprSettings.SortOrder);
         PrefetchNeighbours();
         Invalidate();
@@ -814,6 +828,7 @@ internal sealed class MainView : Component
         Bind(KeyCode.R, Rotate, allowRepeat: false),
         Bind(KeyCode.Z, ResetZoom, allowRepeat: false),
         Bind(KeyCode.T, ToggleThumbnails, allowRepeat: false),
+        Bind(KeyCode.W, ToggleFitToWindow, allowRepeat: false),
         Bind(KeyCode.F5, ToggleSlideshow, allowRepeat: false),
         Bind(KeyCode.Equals, () => Zoom(1.25f)),
         Bind(KeyCode.NumPadAdd, () => Zoom(1.25f)),

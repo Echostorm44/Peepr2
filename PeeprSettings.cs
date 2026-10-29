@@ -32,6 +32,13 @@ internal static class PeeprSettings
         set => LocalStorage.Set("confirmBeforeDelete", value, Json.Boolean);
     }
 
+    /// <summary>Enlarge photos smaller than the window to fill it, rather than showing them at their own size.</summary>
+    public static bool FitToWindow
+    {
+        get => LocalStorage.Get("fitToWindow", false, Json.Boolean);
+        set => LocalStorage.Set("fitToWindow", value, Json.Boolean);
+    }
+
     public static bool ShowThumbnailStrip
     {
         get => LocalStorage.Get("showThumbnailStrip", false, Json.Boolean);

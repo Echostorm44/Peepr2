@@ -24,6 +24,7 @@ internal sealed class SettingsView : Component
     private SortOrder sortOrder = PeeprSettings.SortOrder;
     private int slideshowSeconds = PeeprSettings.SlideshowSeconds;
     private bool showThumbnailStrip = PeeprSettings.ShowThumbnailStrip;
+    private bool fitToWindow = PeeprSettings.FitToWindow;
     private bool confirmBeforeDelete = PeeprSettings.ConfirmBeforeDelete;
     private FileAssociations.Status associationStatus = FileAssociations.GetStatus(FileAssociations.CurrentExePath);
     private string? associationError;
@@ -71,6 +72,15 @@ internal sealed class SettingsView : Component
                                     format: "0").Width(90),
                                 new Label("seconds").FontSize(13).Color(TextSecondary),
                             ])),
+                    new Toggle(
+                        Bind(fitToWindow, value =>
+                        {
+                            fitToWindow = value;
+                            PeeprSettings.FitToWindow = value;
+                            onChanged();
+                        }),
+                        "Fit to window",
+                        "Enlarge photos smaller than the window to fill it (W)"),
                     new Toggle(
                         Bind(showThumbnailStrip, value =>
                         {

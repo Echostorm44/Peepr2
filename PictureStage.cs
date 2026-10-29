@@ -4,8 +4,8 @@ using Cascade.UI;
 namespace Peepr;
 
 /// <summary>
-/// The surface pictures and videos are drawn on. Content opens fitted to the window (a photo is never enlarged
-/// past its own pixels; a video fills the window as players do), except that a photo following a zoomed photo
+/// The surface pictures and videos are drawn on. Content opens fitted to the window (a photo is not enlarged
+/// past its own pixels unless <see cref="EnlargeToFit"/>; a video fills the window as players do), except that a photo following a zoomed photo
 /// opens zoomed onto the same spot; the wheel zooms around the cursor, dragging
 /// pans while zoomed, double-click flips between fit and actual size, and animations play. It owns the textures
 /// of the photos it shows and frees them when the content changes; a video's texture belongs to its
@@ -49,6 +49,9 @@ internal sealed class PictureStage
     public bool HasPicture => frames.Length > 0 || video?.Picture is not null;
 
     public bool IsZoomed => zoom is not null;
+
+    /// <summary>Fit enlarges a photo smaller than the window to fill it, as it does a video.</summary>
+    public bool EnlargeToFit { get; set; }
 
     private int ContentWidth => video?.VideoWidth ?? pictureWidth;
 
@@ -259,8 +262,8 @@ internal sealed class PictureStage
 
     private float Snap(float value) => MathF.Round(value * pixelRatio) / pixelRatio;
 
-    // The scale that fits the (possibly rotated) content in the window. Photos are never enlarged past their
-    // own pixels; video fills the window.
+    // The scale that fits the (possibly rotated) content in the window. Photos are not enlarged past their own
+    // pixels unless EnlargeToFit is on; video fills the window.
     private float FitScale()
     {
         int contentWidth = ContentWidth;
@@ -274,7 +277,7 @@ internal sealed class PictureStage
         float width = sideways ? contentHeight : contentWidth;
         float height = sideways ? contentWidth : contentHeight;
         float fit = MathF.Min(viewport.Width / width, viewport.Height / height);
-        return video is not null ? fit : MathF.Min(fit, 1f / pixelRatio);
+        return video is not null || EnlargeToFit ? fit : MathF.Min(fit, 1f / pixelRatio);
     }
 
     private void ZoomAround(float factor, Point at)
