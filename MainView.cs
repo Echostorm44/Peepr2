@@ -25,6 +25,10 @@ internal sealed class MainView : Component
     private const int ChromeIdleHideMs = 2500;
     private const int NoticeVisibleMs = 4000;
 
+    // The toolbar floats at the top centre; notices drop in just below it (36 px buttons + 12 px padding + a 10 px gap).
+    private const float ToolbarTop = 18f;
+    private const float NoticeTop = ToolbarTop + 48f + 10f;
+
     private readonly record struct DeletedFile(string Path, int Index);
 
     private const float ThumbnailTileSize = 56f;
@@ -955,12 +959,12 @@ internal sealed class MainView : Component
             crossAxisAlignment: CrossAxisAlignment.Center,
             children:
             [
+                Toolbar(),
                 new Spacer(),
                 video is { HasVideo: true } ? VideoControls(video) : Node.Empty,
-                Toolbar(),
                 showThumbnails && folder is { Count: > 1 } ? ThumbnailStrip(folder) : Node.Empty,
             ])
-            .Padding(EdgeInsets.Only(bottom: 22));
+            .Padding(EdgeInsets.Only(top: ToolbarTop, bottom: 22));
 
     // The files around the current one, as many as fit across the window, following it as you move.
     private Node ThumbnailStrip(MediaFolder strip)
@@ -1130,6 +1134,6 @@ internal sealed class MainView : Component
                     .CornerRadius(12)
                     .Border(ToolbarHairline, 1, 12),
                 new Spacer(),
-            ]).Padding(EdgeInsets.Only(top: 18));
+            ]).Padding(EdgeInsets.Only(top: NoticeTop));
     }
 }
