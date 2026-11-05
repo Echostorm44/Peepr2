@@ -9,7 +9,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsAotCompatible>true</IsAotCompatible>
-    <Version>2.0.1</Version>
+    <!-- A local build's version. A release takes its version from the tag: CI sets the Version environment
+         variable, and a value set here unconditionally would override it. -->
+    <Version Condition="'$(Version)' == ''">2.0.1</Version>
 
     <!-- The cascade installer packager stages helper projects under "<output>-build"; keep them,
          and the tests, out of this project's default globbing. -->
@@ -31,7 +33,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.51" />
+    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.53" />
     <PackageReference Include="Echostorm.SharpImage" Version="1.0.19" />
     <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.4" />
     <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.4" />
