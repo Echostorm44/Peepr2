@@ -67,6 +67,6 @@ public sealed class PeeprInstaller : CascadeInstaller
     private static string ResolveVersion()
     {
         Version? version = typeof(PeeprInstaller).Assembly.GetName().Version;
-        return version is null ? "2.0.0" : $"{version.Major}.{version.Minor}.{version.Build}";
+        return version is null ? "2.0.1" : $"{version.Major}.{version.Minor}.{version.Build}";
     }
 }

@@ -2,15 +2,16 @@ using Cascade.UI;
 using Cascade.UI.Installer.Update;
 using Peepr;
 
-// Updates come from GitHub Releases. Nothing is downloaded or applied without asking: MainView checks in the
-// background and offers a newer version in a banner. Crash rollback after an update belongs to the update shim;
-// the app's only part is Updater.MarkHealthy() once it is up. Best effort: a failure here never stops Peepr.
+// Updates come from GitHub Releases (a v* tag builds, signs and publishes one). Nothing is downloaded or applied
+// without asking: MainView checks in the background and offers a newer version in a banner. Crash rollback after
+// an update belongs to the update shim; the app's only part is Updater.MarkHealthy() once it is up. Best effort:
+// a failure here never stops Peepr.
 try
 {
     string installDir = AppContext.BaseDirectory;
     string appVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version is { } v
         ? $"{v.Major}.{v.Minor}.{v.Build}"
-        : "2.0.0";
+        : "2.0.1";
 
     Updater.Configure(
         new UpdateConfig
