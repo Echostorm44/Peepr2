@@ -877,7 +877,7 @@ internal sealed class MainView : Component
     {
         Node backdrop = wallpaper is null
             ? Node.Empty
-            : new Image(wallpaper).Fit(ImageFit.Cover).Expand();
+            : new Image(wallpaper).Fit(ImageFit.Cover).Expand().AccessibleLabel(""); // decorative
         return new Stack(
         [
             backdrop,
@@ -997,7 +997,7 @@ internal sealed class MainView : Component
     private Node ThumbnailTile(string path, int index, bool current)
     {
         Node content = thumbnails.Get(path) is { } image
-            ? new Image(image).Fit(ImageFit.Cover).Size(ThumbnailTileSize, ThumbnailTileSize)
+            ? new Image(image).Fit(ImageFit.Cover).Size(ThumbnailTileSize, ThumbnailTileSize).AccessibleLabel("") // the tile carries the name
             : MediaTypes.KindOf(path) == MediaKind.Video
                 ? new Center(new IconView(LucideIcons.Film, size: 22).Color(TextSecondary))
                 : Node.Empty;

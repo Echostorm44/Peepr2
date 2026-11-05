@@ -31,15 +31,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.47" />
+    <PackageReference Include="Echostorm.Cascade.UI" Version="0.1.0-alpha.51" />
     <PackageReference Include="Echostorm.SharpImage" Version="1.0.19" />
-    <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.3" />
-    <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.3" />
+    <PackageReference Include="MediaKernel.Playback" Version="0.1.0-alpha.4" />
+    <PackageReference Include="MediaKernel.Codecs" Version="0.1.0-alpha.4" />
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Assets\PeeprBackDrop.png" LogicalName="PeeprBackDrop.png" />
     <InternalsVisibleTo Include="Peepr.Tests" />
+    <!-- Peepr is a Windows app (registry, WASAPI, the Windows shell): say so once for the platform analyzer. -->
+    <AssemblyAttribute Include="System.Runtime.Versioning.SupportedOSPlatformAttribute">
+      <_Parameter1>windows</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

@@ -10,11 +10,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="TUnit" Version="1.73.0" />
+    <PackageReference Include="TUnit" Version="1.80.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\Peepr.csproj" />
+    <!-- Peepr is Windows-only, and so are its tests. -->
+    <AssemblyAttribute Include="System.Runtime.Versioning.SupportedOSPlatformAttribute">
+      <_Parameter1>windows</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>
