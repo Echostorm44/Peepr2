@@ -10,7 +10,7 @@
 #
 # Prerequisites in the repo settings: an environment named "release" with AZURE_CLIENT_ID and
 # AZURE_TENANT_ID secrets, and a federated credential in Azure for
-# subject repo:Echostorm44/Peepr2:environment:release.
+# subject repo:Echostorm44@107306362/Peepr2@1446911633:environment:release (GitHub's ID-based format).
 # ─────────────────────────────────────────────────────────────────────────────
 name: Build Installer
 
